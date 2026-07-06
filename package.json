@@ -1,0 +1,17 @@
+{
+  "name": "tally-expense-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram Mini App expense splitter on Cloudflare Workers + D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute tally --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute tally --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250601.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0"
+  }
+}

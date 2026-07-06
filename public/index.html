@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Tally</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --paper:#EDEBE4; --card:#fff; --ink:#1B1D22; --muted:#6B6F76; --line:#E3E0D8;
+    --green:#157F5B; --greenSoft:#E4F1EA; --clay:#B54B3A; --claySoft:#F6E7E2;
+    --amber:#9A6B12; --amberSoft:#F4EBD4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:system-ui,-apple-system,sans-serif;-webkit-tap-highlight-color:transparent}
+  #app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;
+    padding-bottom:96px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  h1{font-size:26px;font-weight:800;letter-spacing:-.5px;margin:0}
+  .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .pad{padding:16px}
+  .row{display:flex;align-items:center;gap:8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  .label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  input{width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);
+    background:#FBFAF7;font-size:15px;color:var(--ink);outline:none;font-family:inherit}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  .cta{width:100%;padding:14px;border-radius:14px;background:var(--green);color:#fff;font-size:16px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;gap:8px}
+  .cta[disabled]{background:#C9C6BE}
+  .ghost{padding:12px 16px;border-radius:12px;border:1.5px solid var(--line);background:var(--card);font-weight:700}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;font-size:13px;font-weight:600}
+  .av{border-radius:50%;background:#DFE7E1;color:var(--green);font-weight:700;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .bar{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;padding:12px 16px 20px;
+    background:linear-gradient(to top,var(--paper) 72%,transparent)}
+  .top{display:flex;align-items:center;gap:6px;padding:14px 8px 10px}
+  .icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center}
+  .muted{color:var(--muted)}
+  .stepper{display:flex;align-items:center;gap:4px;background:var(--amberSoft);border-radius:10px;padding:3px}
+  .stepper button{width:26px;height:26px;border-radius:8px;background:#fff;color:var(--amber);font-weight:800;font-size:16px;
+    display:flex;align-items:center;justify-content:center}
+  .stepper .w{font-weight:800;color:var(--amber);min-width:16px;text-align:center}
+  .toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
+    padding:10px 16px;border-radius:12px;font-size:13px;font-weight:600;z-index:50}
+  textarea{width:100%;border-radius:12px;border:1.5px solid var(--line);background:#F7F6F1;padding:12px;
+    font-family:ui-monospace,monospace;font-size:13px;resize:none;color:var(--ink)}
+  .divider{border:none;border-top:2px dashed var(--line);margin:12px 0}
+  a{color:var(--green)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="bar" class="bar"></div>
+<script>
+// ---------- Telegram + auth ----------
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand?.(); }
+
+// Dev fallback for browser testing: open with ?dev=2:Ben
+const devParam = new URLSearchParams(location.search).get("dev");
+
+async function api(path, opts={}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers||{}) };
+  if (tg?.initData) headers["Authorization"] = "tma " + tg.initData;
+  else if (devParam) headers["X-Dev-User"] = devParam;
+  const res = await fetch("/api" + path, { ...opts, headers });
+  if (!res.ok) {
+    const e = await res.json().catch(()=>({error:res.statusText}));
+    throw new Error(e.error || ("HTTP " + res.status));
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+// ---------- helpers ----------
+const money = (n, c="$") => c + Math.abs(Number(n)).toFixed(2);
+const initials = n => n.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+function avatar(name, size=28, active){
+  const bg = active ? "var(--green)" : "#DFE7E1";
+  const fg = active ? "#fff" : "var(--green)";
+  return `<div class="av" style="width:${size}px;height:${size}px;font-size:${size*0.4}px;background:${bg};color:${fg}">${initials(name)}</div>`;
+}
+const app = document.getElementById("app");
+const bar = document.getElementById("bar");
+function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),1700); }
+
+// ---------- state ----------
+let ME = null;              // {id, first_name}
+let EVENT = null;           // current full event
+let DRAFT = null;           // expense editor draft
+const nameOf = id => EVENT?.participants.find(p=>p.id===id)?.name || "?";
+
+// ==========================================================
+async function start(){
+  try { ME = await api("/me"); }
+  catch(e){ app.innerHTML = `<div class="pad card" style="margin:16px">Couldn't verify your Telegram session.<br><span class="muted">${e.message}</span><br><br>Open this from the bot inside Telegram, or add <b>?dev=1:You</b> to the URL for local testing.</div>`; return; }
+  home();
+}
+
+// ---------- HOME ----------
+async function home(){
+  EVENT = null;
+  app.innerHTML = `<div class="pad"><h1>Tally</h1><div class="sub">Split the tab, keep it even.</div></div>
+    <div id="list" class="pad muted">Loading…</div>`;
+  bar.innerHTML = `<button class="cta" onclick="newEventForm()">＋ New event</button>`;
+  const { events } = await api("/events");
+  const list = document.getElementById("list");
+  if (!events.length){ list.innerHTML = `<div class="muted" style="text-align:center;padding:30px">No events yet. Start one for your next trip or dinner.</div>`; return; }
+  list.className = "pad"; list.style.display="flex"; list.style.flexDirection="column"; list.style.gap="12px";
+  list.innerHTML = events.map(e=>`
+    <button class="card" style="text-align:left" onclick="openEvent('${e.id}')">
+      <div class="row" style="justify-content:space-between">
+        <span style="font-size:17px;font-weight:700">${esc(e.title)}</span>
+        <span class="mono" style="font-weight:700">${money(e.total, e.currency)}</span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">${e.participantCount} people · ${e.expenseCount} expenses</div>
+    </button>`).join("");
+}
+
+function newEventForm(){
+  app.innerHTML = `<div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">New event</span></div>
+    <div class="pad"><div class="card">
+      <div class="label">Event name</div><input id="ev-title" placeholder="Weekend in Da Nang" />
+      <div class="label" style="margin-top:14px">Currency</div><input id="ev-cur" value="$" style="width:90px" />
+      <div class="label" style="margin-top:14px">Other people (one per line)</div>
+      <textarea id="ev-names" style="height:110px" placeholder="Ben&#10;Chi&#10;Duc"></textarea>
+      <div class="muted" style="font-size:12px;margin-top:6px">You're added automatically. Others can join later from their own Telegram.</div>
+    </div></div>`;
+  bar.innerHTML = `<button class="cta" onclick="createEvent()">Create event</button>`;
+  setTimeout(()=>document.getElementById("ev-title").focus(),50);
+}
+async function createEvent(){
+  const title = val("ev-title").trim();
+  const currency = val("ev-cur").trim() || "$";
+  const participantNames = val("ev-names").split("\n").map(s=>s.trim()).filter(Boolean);
+  if (!title) return toast("Give the event a name");
+  const ev = await api("/events",{method:"POST",body:JSON.stringify({title,currency,participantNames})});
+  EVENT = ev; renderEvent();
+}
+
+// ---------- EVENT ----------
+async function openEvent(id){ EVENT = await api("/events/"+id); renderEvent(); }
+async function reload(){ EVENT = await api("/events/"+EVENT.id); renderEvent(); }
+
+function renderEvent(){
+  const cur = EVENT.currency;
+  const iAmIn = EVENT.participants.some(p=>p.user_id===ME.id);
+  const unclaimed = EVENT.participants.filter(p=>!p.user_id);
+
+  const balances = EVENT.participants.map(p=>{
+    const b = EVENT.balances[p.id]||0; const pos=b>0.005, neg=b<-0.005;
+    const bg = pos?"var(--greenSoft)":neg?"var(--claySoft)":"#EEECE6";
+    const fg = pos?"var(--green)":neg?"var(--clay)":"var(--muted)";
+    return `<span class="chip" style="background:${bg};color:${fg}">${avatar(p.name,20,p.user_id===ME.id)} ${esc(p.name)} ${pos?"+":neg?"−":""}${money(b,cur)}</span>`;
+  }).join("");
+
+  const expenses = EVENT.expenses.map(x=>{
+    const mine = x.createdBy===ME.id;
+    const inc = x.splits.filter(s=>s.included);
+    const chips = inc.map(s=>`${avatar(nameOf(s.participantId),22)}${Number(s.weight)!==1?`<span class="mono" style="font-size:11px;font-weight:700;color:var(--amber);background:var(--amberSoft);border-radius:6px;padding:1px 4px">×${s.weight}</span>`:""}`).join("");
+    return `<div class="card" style="padding:14px">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div><div style="font-size:16px;font-weight:700">${esc(x.title)}</div>
+          <div class="muted" style="font-size:13px;margin-top:3px">${esc(nameOf(x.paidBy))} paid · split ${inc.length} way${inc.length>1?"s":""}</div></div>
+        <div class="mono" style="font-weight:800">${money(x.amount,cur)}</div>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">${chips}<div style="flex:1"></div>
+        ${mine ? `<button class="icon" onclick="editExpense('${x.id}')">✎</button>
+                  <button class="icon" style="color:var(--clay)" onclick="delExpense('${x.id}')">🗑</button>`
+               : `<span class="muted" style="font-size:11px">by ${esc(nameOf2(x.createdBy))}</span>`}
+      </div></div>`;
+  }).join("");
+
+  app.innerHTML = `
+    <div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">${esc(EVENT.title)}</span></div>
+    <div class="pad" style="padding-top:0">
+      <div class="card row" style="justify-content:space-between">
+        <div><div class="label" style="margin:0">Total spent</div>
+          <div class="mono" style="font-size:26px;font-weight:800">${money(EVENT.total,cur)}</div></div>
+        <div class="row" style="gap:0">${EVENT.participants.map((p,i)=>`<div style="margin-left:${i?-8:0}px">${avatar(p.name,30,p.user_id===ME.id)}</div>`).join("")}</div>
+      </div>
+      <div class="row" style="flex-wrap:wrap;margin-top:12px">${balances}</div>
+      ${!iAmIn && unclaimed.length ? `<div class="card" style="margin-top:12px;padding:12px">
+        <div class="muted" style="font-size:13px;margin-bottom:8px">Which one are you? Tap to join this event:</div>
+        <div class="row" style="flex-wrap:wrap">${unclaimed.map(p=>`<button class="chip" style="background:var(--greenSoft);color:var(--green)" onclick="claim('${p.id}')">${esc(p.name)}</button>`).join("")}</div></div>`:""}
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="label">Expenses</div>
+      <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">No expenses yet. Add the first one.</div>`}</div>
+    </div>`;
+  bar.innerHTML = `<div class="row">
+    <button class="cta" onclick="newExpense()">＋ Add expense</button>
+    <button class="ghost" onclick="settleView()" ${EVENT.expenses.length?"":"disabled style=opacity:.5"}>Settle</button></div>`;
+}
+const nameOf2 = uid => { const p = EVENT.participants.find(p=>p.user_id===uid); return p?p.name:"someone"; };
+
+async function claim(pid){ EVENT = await api("/events/"+EVENT.id+"/claim",{method:"POST",body:JSON.stringify({participantId:pid})}); renderEvent(); }
+
+// ---------- EXPENSE EDITOR ----------
+function newExpense(){
+  DRAFT = { id:null, title:"", amount:"", paidBy:ME_participant()?.id || EVENT.participants[0].id,
+    splits: EVENT.participants.map(p=>({participantId:p.id, included:true, weight:1})) };
+  renderEditor();
+}
+function editExpense(id){
+  const x = EVENT.expenses.find(e=>e.id===id);
+  DRAFT = { id:x.id, title:x.title, amount:String(x.amount), paidBy:x.paidBy,
+    splits: EVENT.participants.map(p=>{ const s=x.splits.find(s=>s.participantId===p.id);
+      return {participantId:p.id, included:s?s.included:false, weight:s?s.weight:1}; }) };
+  renderEditor();
+}
+const ME_participant = () => EVENT.participants.find(p=>p.user_id===ME.id);
+
+function renderEditor(){
+  const cur = EVENT.currency;
+  const amt = Number(DRAFT.amount)||0;
+  const incl = DRAFT.splits.filter(s=>s.included && s.weight>0);
+  const totalW = incl.reduce((a,s)=>a+s.weight,0);
+  const share = s => (s.included && s.weight>0 && totalW>0) ? amt*s.weight/totalW : 0;
+
+  const payBy = EVENT.participants.map(p=>`<button class="chip" style="border:1.5px solid ${DRAFT.paidBy===p.id?"var(--green)":"var(--line)"};background:${DRAFT.paidBy===p.id?"var(--greenSoft)":"#fff"};color:${DRAFT.paidBy===p.id?"var(--green)":"var(--ink)"}" onclick="setPaid('${p.id}')">${avatar(p.name,22,DRAFT.paidBy===p.id)} ${esc(p.name)}</button>`).join("");
+
+  const rows = EVENT.participants.map(p=>{
+    const s = DRAFT.splits.find(x=>x.participantId===p.id);
+    return `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);opacity:${s.included?1:.45}">
+      <button onclick="toggle('${p.id}')" style="width:22px;height:22px;border-radius:6px;border:1.5px solid ${s.included?"var(--green)":"var(--line)"};background:${s.included?"var(--green)":"#fff"};color:#fff;font-size:13px">${s.included?"✓":""}</button>
+      ${avatar(p.name,28)}<span style="font-weight:600;flex:1">${esc(p.name)}</span>
+      ${s.included?`<div class="stepper"><button onclick="wgt('${p.id}',-1)">−</button><span class="w mono">${s.weight}</span><button onclick="wgt('${p.id}',1)">＋</button></div>
+        <span class="mono" style="font-weight:700;min-width:64px;text-align:right">${money(share(s),cur)}</span>`:""}
+    </div>`;
+  }).join("");
+
+  app.innerHTML = `
+    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">${DRAFT.id?"Edit expense":"New expense"}</span></div>
+    <div class="pad" style="padding-top:0;display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="label">What was it for?</div>
+        <input id="d-title" value="${esc(DRAFT.title)}" placeholder="Seafood dinner" oninput="DRAFT.title=this.value" />
+        <div class="label" style="margin-top:14px">Amount</div>
+        <div class="row"><span class="mono muted" style="font-size:20px;font-weight:700">${cur}</span>
+          <input id="d-amt" class="mono" style="font-size:20px;font-weight:700" inputmode="decimal" value="${DRAFT.amount}" placeholder="0.00"
+            oninput="DRAFT.amount=this.value.replace(/[^0-9.]/g,'');liveShares()" /></div>
+        <div class="label" style="margin-top:14px">Paid by</div>
+        <div class="row" style="flex-wrap:wrap">${payBy}</div>
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between"><div class="label" style="margin:0">Split between</div>
+          <div class="muted" style="font-size:12px">weight <b style="color:var(--amber)">×</b> = shares</div></div>
+        <div id="rows">${rows}</div>
+        <div class="row" style="justify-content:space-between;padding-top:12px;font-size:13px">
+          <span class="muted" id="wsum">${totalW} share${totalW!==1?"s":""} across ${incl.length} people</span>
+          <span class="mono" style="font-weight:700" id="atot">= ${money(amt,cur)}</span></div>
+      </div>
+    </div>`;
+  bar.innerHTML = `<button class="cta" onclick="saveExpense()">✓ ${DRAFT.id?"Save changes":"Add expense"}</button>`;
+}
+function setPaid(id){ DRAFT.paidBy=id; renderEditor(); }
+function toggle(id){ const s=DRAFT.splits.find(x=>x.participantId===id); s.included=!s.included; renderEditor(); }
+function wgt(id,d){ const s=DRAFT.splits.find(x=>x.participantId===id); s.weight=Math.max(1,s.weight+d); renderEditor(); }
+function liveShares(){ // light update without full re-render while typing amount
+  const cur=EVENT.currency, amt=Number(DRAFT.amount)||0;
+  const incl=DRAFT.splits.filter(s=>s.included&&s.weight>0); const tw=incl.reduce((a,s)=>a+s.weight,0);
+  document.getElementById("atot").textContent = "= "+money(amt,cur);
+  document.querySelectorAll("#rows .row").forEach((row,i)=>{ const s=DRAFT.splits[i];
+    const cell=row.querySelector(".mono:last-child"); if(cell&&s.included) cell.textContent=money(tw>0?amt*s.weight/tw:0,cur); });
+}
+async function saveExpense(){
+  const b = { title:DRAFT.title.trim(), amount:Number(DRAFT.amount)||0, paidBy:DRAFT.paidBy, splits:DRAFT.splits };
+  if (!b.title) return toast("Add a title");
+  if (!(b.amount>0)) return toast("Add an amount");
+  if (!b.splits.some(s=>s.included)) return toast("Pick at least one person");
+  try{
+    EVENT = DRAFT.id
+      ? await api("/expenses/"+DRAFT.id,{method:"PUT",body:JSON.stringify(b)})
+      : await api("/events/"+EVENT.id+"/expenses",{method:"POST",body:JSON.stringify(b)});
+    renderEvent();
+  }catch(e){ toast(e.message); }
+}
+async function delExpense(id){ if(!confirm("Delete this expense?"))return;
+  try{ EVENT = await api("/expenses/"+id,{method:"DELETE"}); renderEvent(); }catch(e){ toast(e.message); } }
+
+// ---------- SETTLE ----------
+async function settleView(){
+  const cur = EVENT.currency;
+  const rows = EVENT.settlement.length ? EVENT.settlement.map(t=>`
+    <div class="row" style="padding:10px 0;border-bottom:1px dotted var(--line)">
+      ${avatar(nameOf(t.from),26)}<span style="font-weight:700">${esc(nameOf(t.from))}</span>
+      <span class="muted">→</span>${avatar(nameOf(t.to),26)}<span style="font-weight:700">${esc(nameOf(t.to))}</span>
+      <div style="flex:1"></div><span class="mono" style="font-weight:800;color:var(--green)">${money(t.amount,cur)}</span></div>`).join("")
+    : `<div style="text-align:center;padding:20px;color:var(--green);font-weight:700">✓ All settled up.</div>`;
+
+  const { text } = await api("/events/"+EVENT.id+"/summary");
+  window.__summary = text;
+  app.innerHTML = `
+    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">Settle up</span></div>
+    <div class="pad" style="padding-top:0">
+      <div class="card">
+        <div style="text-align:center"><div class="mono muted" style="font-size:12px;letter-spacing:2px">SETTLE UP</div>
+          <div style="font-weight:800;font-size:18px">${esc(EVENT.title)}</div></div>
+        <hr class="divider" />${rows}
+      </div>
+      <div class="muted" style="text-align:center;font-size:12px;margin:10px 0">Fewest transfers to make everyone even</div>
+      <textarea readonly style="height:96px" onclick="this.select()">${esc(text)}</textarea>
+    </div>`;
+  bar.innerHTML = `<button class="cta" onclick="copySummary()">⧉ Copy summary for the chat</button>`;
+}
+async function copySummary(){
+  const text = window.__summary || "";
+  try{ await navigator.clipboard.writeText(text); toast("Copied — paste it in the chat"); }
+  catch{ toast("Select the text above to copy"); }
+}
+
+// ---------- utils ----------
+function val(id){ return document.getElementById(id).value; }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+start();
+</script>
+</body>
+</html>

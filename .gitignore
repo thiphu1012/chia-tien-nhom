@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+.dev.vars.*
+dist/
+
+# Local D1 / SQLite state
+*.sqlite
+*.sqlite-journal
+
+# Secrets & env
+.env
+.env.*
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+*.log
+
+# Local snapshots / archives
+tally-expense-bot.zip

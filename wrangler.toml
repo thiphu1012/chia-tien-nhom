@@ -1,0 +1,24 @@
+name = "tally-expense-bot"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+# The Mini App front-end is served from ./public by the same Worker.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Public URL of this Worker. After your first deploy, set this to the real
+# workers.dev URL (or your custom domain) and deploy again.
+[vars]
+WEBAPP_URL = "https://tally-expense-bot.YOUR-SUBDOMAIN.workers.dev"
+# DEV_MODE = "true"   # uncomment ONLY for local testing (enables X-Dev-User bypass)
+
+# D1 database binding. Fill in database_id from `wrangler d1 create tally`.
+[[d1_databases]]
+binding = "DB"
+database_name = "tally"
+database_id = "PASTE-DATABASE-ID-HERE"
+
+# BOT_TOKEN and WEBHOOK_SECRET are secrets, not vars — set them with:
+#   npx wrangler secret put BOT_TOKEN
+#   npx wrangler secret put WEBHOOK_SECRET
