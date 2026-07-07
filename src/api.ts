@@ -300,7 +300,9 @@ function payFields(body: any): { bank: string | null; account: string | null; qr
   const qr = body.payQr ? String(body.payQr) : null;
   if (qr) {
     if (qr.length > 400_000) return "Ảnh QR quá lớn (hãy dùng ảnh nhỏ hơn)";
-    if (!/^data:image\/(png|jpe?g|webp);base64,/.test(qr) && !/^https?:\/\//.test(qr)) {
+    // Only a strict base64 image data URL — its alphabet contains no HTML-breaking
+    // chars, so it is safe in an <img src>. (The client never sends URL-based QRs.)
+    if (!/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/]+=*$/.test(qr)) {
       return "Ảnh QR không hợp lệ";
     }
   }

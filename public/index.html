@@ -459,7 +459,7 @@ function renderEditor(){
         ${DRAFT.payMode==="image"
           ? (DRAFT.payQr
               ? `<div style="text-align:center">
-                   <img src="${DRAFT.payQr}" alt="QR" style="max-width:210px;max-height:210px;border-radius:12px;border:1px solid var(--line)" />
+                   <img src="${esc(DRAFT.payQr)}" alt="QR" style="max-width:210px;max-height:210px;border-radius:12px;border:1px solid var(--line)" />
                    <div><button class="ghost" style="margin-top:10px;color:var(--clay)" onclick="clearQr()">Xoá ảnh</button></div>
                  </div>`
               : `<label class="ghost" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:22px;border-style:dashed;cursor:pointer">
@@ -563,12 +563,12 @@ function openPayModal(pid){
   const p = EVENT.participants.find(x=>x.id===pid); if(!p) return;
   const infos = payInfosFor(pid);
   const body = infos.length ? infos.map(i => i.qr
-    ? `<div style="text-align:center;margin-top:8px"><img src="${i.qr}" alt="QR ${esc(p.name)}" onclick="showImg(this.src)"
+    ? `<div style="text-align:center;margin-top:8px"><img src="${esc(i.qr)}" alt="QR ${esc(p.name)}" onclick="showImg(this.src)"
          style="max-width:240px;max-height:240px;border-radius:12px;border:1px solid var(--line);cursor:zoom-in" /></div>`
     : `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
          <span class="chip" style="background:var(--paper);border:1px solid var(--line)">🏦 ${esc(i.bank)}</span>
          <span class="mono" style="font-weight:700;font-size:16px">${esc(i.account)}</span>
-         <button class="ghost" style="padding:6px 12px" onclick="copyText('${esc(i.bank)} ${esc(i.account)} - ${esc(p.name)}')">⧉ Chép thông tin</button>
+         <button class="ghost" style="padding:6px 12px" data-copy="${esc(i.bank + " " + i.account + " - " + p.name)}" onclick="copyText(this.dataset.copy)">⧉ Chép thông tin</button>
        </div>`).join(`<div style="height:14px"></div>`)
     : `<div class="muted" style="margin-top:8px">Người này chưa thêm thông tin nhận tiền.</div>`;
   const o=document.createElement("div"); o.className="modal"; o.onclick=()=>o.remove();
