@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -10,11 +10,12 @@
     --paper:#EDEBE4; --card:#fff; --ink:#1B1D22; --muted:#6B6F76; --line:#E3E0D8;
     --green:#157F5B; --greenSoft:#E4F1EA; --clay:#B54B3A; --claySoft:#F6E7E2;
     --amber:#9A6B12; --amberSoft:#F4EBD4;
+    --appw:640px;   /* default app content width */
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--paper);color:var(--ink);
     font-family:system-ui,-apple-system,sans-serif;-webkit-tap-highlight-color:transparent}
-  #app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;
+  #app{max-width:var(--appw);margin:0 auto;min-height:100vh;display:flex;flex-direction:column;
     padding-bottom:96px}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   h1{font-size:26px;font-weight:800;letter-spacing:-.5px;margin:0}
@@ -25,6 +26,28 @@
   .label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
   input{width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);
     background:#FBFAF7;font-size:15px;color:var(--ink);outline:none;font-family:inherit}
+  input.invalid{border-color:var(--clay);background:#FCEDEA}
+  .ferr{color:var(--clay);font-size:12px;font-weight:600;min-height:15px;margin-top:4px}
+  select{width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);
+    background:#FBFAF7;font-size:15px;color:var(--ink);outline:none;font-family:inherit}
+  .paytab{padding:8px 14px;font-size:14px;border-radius:10px}
+  .paytab.on{border-color:var(--green);background:var(--greenSoft);color:var(--green)}
+  .qrthumb{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line);cursor:zoom-in}
+  .imgmodal{position:fixed;inset:0;background:rgba(20,20,20,.82);display:flex;align-items:center;
+    justify-content:center;z-index:100;padding:24px;cursor:zoom-out}
+  .imgmodal img{max-width:92vw;max-height:88vh;border-radius:14px;background:#fff}
+  .scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table.settle{width:100%;border-collapse:collapse;font-size:14px}
+  table.settle th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;
+    text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.settle td{padding:11px 8px;border-bottom:1px dotted var(--line);vertical-align:middle}
+  table.settle tr:last-child td{border-bottom:none}
+  table.settle .amt{text-align:right;font-weight:800;color:var(--green);white-space:nowrap;font-variant-numeric:tabular-nums}
+  table.settle .txn{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .modal{position:fixed;inset:0;background:rgba(20,20,20,.55);display:flex;align-items:center;justify-content:center;
+    z-index:90;padding:20px}
+  .modal .sheet{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;max-width:340px;
+    width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);max-height:86vh;overflow:auto}
   button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
   .cta{width:100%;padding:14px;border-radius:14px;background:var(--green);color:#fff;font-size:16px;font-weight:700;
     display:flex;align-items:center;justify-content:center;gap:8px}
@@ -33,7 +56,7 @@
   .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;font-size:13px;font-weight:600}
   .av{border-radius:50%;background:#DFE7E1;color:var(--green);font-weight:700;
     display:flex;align-items:center;justify-content:center;flex-shrink:0}
-  .bar{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;padding:12px 16px 20px;
+  .bar{position:fixed;bottom:0;left:0;right:0;max-width:var(--appw);margin:0 auto;padding:12px 16px 20px;
     background:linear-gradient(to top,var(--paper) 72%,transparent)}
   .top{display:flex;align-items:center;gap:6px;padding:14px 8px 10px}
   .icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center}
@@ -74,7 +97,112 @@ async function api(path, opts={}) {
 }
 
 // ---------- helpers ----------
-const money = (n, c="$") => c + Math.abs(Number(n)).toFixed(2);
+// Vietnamese number format: '.' groups thousands, ',' is the decimal separator.
+// The fractional part is shown only when non-zero (VND is normally whole numbers).
+function fmtVN(n){
+  n = Math.abs(Number(n)||0);
+  const [i,d] = n.toFixed(2).split(".");
+  const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return grouped + (d === "00" ? "" : "," + d);
+}
+const money = (n, c="₫") => fmtVN(n) + " " + c;
+// VND (đồng) has no subunit in circulation, so we forbid a decimal part for it.
+const isVND = c => c === "₫" || String(c||"").trim().toUpperCase() === "VND";
+// Parse a Vietnamese-typed amount ("540.000,50") into a JS number (540000.5).
+const amountToNumber = s => Number(String(s).replace(/\./g,"").replace(",", ".")) || 0;
+// Live-format the amount field: group thousands with '.', keep a ',' decimal part
+// only when the currency allows it. Returns the display string.
+function formatAmountStr(raw, allowDec){
+  let s = String(raw).replace(/[^0-9.,]/g, "");
+  const hasComma = allowDec && s.indexOf(",") !== -1;
+  s = s.replace(/\./g, "");                    // drop any existing thousand separators
+  let [intPart, ...rest] = s.split(",");
+  const dec = rest.join("").slice(0, 2);       // at most 2 decimals; ignore extra commas
+  intPart = intPart.replace(/^0+(?=\d)/, "");  // strip leading zeros
+  if (intPart === "") intPart = hasComma ? "0" : "";
+  let grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  if (hasComma) grouped += "," + dec;
+  return grouped;
+}
+// oninput handler for the amount field: reformat in place, keep the caret sane.
+function onAmountInput(el){
+  const digitsBeforeCaret = el.value.slice(0, el.selectionStart).replace(/[^0-9]/g, "").length;
+  const formatted = formatAmountStr(el.value, !isVND(EVENT.currency));
+  el.value = formatted;
+  DRAFT.amount = formatted;
+  let pos = 0, seen = 0;
+  while (pos < formatted.length && seen < digitsBeforeCaret){
+    const ch = formatted.charCodeAt(pos); if (ch >= 48 && ch <= 57) seen++; pos++;
+  }
+  try { el.setSelectionRange(pos, pos); } catch(_){}
+  clearErr("d-amt");
+  liveShares();
+}
+// Prefill the amount field from a stored number (used when editing an expense).
+function numToInput(n, cur){
+  if (n == null || n === "") return "";
+  return formatAmountStr(String(n).replace(".", ","), !isVND(cur));
+}
+// ---- inline field validation ----
+function fieldError(id, msg){
+  const inp = document.getElementById(id); if (inp) inp.classList.toggle("invalid", !!msg);
+  const box = document.getElementById("err-" + id); if (box) box.textContent = msg || "";
+  return !!msg;
+}
+function clearErr(id){ fieldError(id, ""); }
+// Returns an error string for an invalid amount, or "" when it is valid money.
+function validateMoney(str, cur){
+  const s = String(str).trim().replace(/,$/, "");        // tolerate a trailing comma mid-typing
+  if (!s) return "Nhập số tiền";
+  const cleaned = s.replace(/\./g, "");
+  const ok = isVND(cur) ? /^\d+$/.test(cleaned) : /^\d+(,\d{1,2})?$/.test(cleaned);
+  if (!ok) return isVND(cur) ? "₫ chỉ nhận số nguyên" : "Số tiền không hợp lệ";
+  const n = amountToNumber(s);
+  if (!(n > 0)) return "Số tiền phải lớn hơn 0";
+  if (n > 999999999999) return "Số tiền quá lớn";
+  return "";
+}
+// ---- Vietnamese payment methods: banks from the official VietQR/NAPAS list + top e-wallets ----
+const BANKS = ["ABBANK","ACB","Agribank","BacABank","BaoVietBank","BIDV","CAKE","CIMB","COOPBANK",
+  "Eximbank","HDBank","KBank","KienLongBank","LPBank","MBBank","MBV","MSB","NamABank","NCB","OCB",
+  "PGBank","PVcomBank","PVcomBank Pay","Sacombank","SaigonBank","SCB","SeABank","SHB","ShinhanBank",
+  "Techcombank","Timo","TPBank","Ubank","VIB","VietABank","VietBank","VietCapitalBank","Vietcombank",
+  "VietinBank","VPBank","Woori"];
+const WALLETS = ["MoMo","ZaloPay","Viettel Money","ShopeePay","VNPay"];
+function payOptions(selected){
+  const opt = n => `<option value="${esc(n)}"${n===selected?" selected":""}>${esc(n)}</option>`;
+  return `<optgroup label="Ngân hàng">${BANKS.map(opt).join("")}</optgroup>`
+       + `<optgroup label="Ví điện tử">${WALLETS.map(opt).join("")}</optgroup>`;
+}
+// Shrink an attached image (usually a transfer QR) to a small data URL so it fits in D1.
+function fileToDataURL(file, maxPx=440){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const scale=Math.min(1, maxPx/Math.max(img.width,img.height));
+      const w=Math.max(1,Math.round(img.width*scale)), h=Math.max(1,Math.round(img.height*scale));
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      let url=cv.toDataURL("image/png");                        // PNG keeps QR edges crisp
+      if(url.length>140000) url=cv.toDataURL("image/jpeg",0.82); // fall back for photos
+      res(url);
+    };
+    img.onerror=()=>rej(new Error("Không đọc được ảnh"));
+    const fr=new FileReader(); fr.onload=()=>img.src=fr.result;
+    fr.onerror=()=>rej(new Error("Không đọc được tệp")); fr.readAsDataURL(file);
+  });
+}
+async function onQrPick(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  if(!/^image\//.test(f.type)) return toast("Vui lòng chọn tệp ảnh");
+  try{ DRAFT.payQr = await fileToDataURL(f); renderEditor(); } catch(e){ toast(e.message); }
+}
+function clearQr(){ DRAFT.payQr=""; renderEditor(); }
+function setPayMode(m){ DRAFT.payMode=m; renderEditor(); }
+function showImg(src){ const o=document.createElement("div"); o.className="imgmodal";
+  const im=new Image(); im.src=src; o.appendChild(im); o.onclick=()=>o.remove(); document.body.appendChild(o); }
+async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Đã sao chép"); }
+  catch{ toast("Không sao chép được"); } }
 const initials = n => n.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
 function avatar(name, size=28, active){
   const bg = active ? "var(--green)" : "#DFE7E1";
@@ -95,19 +223,19 @@ const nameOf = id => EVENT?.participants.find(p=>p.id===id)?.name || "?";
 // ==========================================================
 async function start(){
   try { ME = await api("/me"); }
-  catch(e){ app.innerHTML = `<div class="pad card" style="margin:16px">Couldn't verify your Telegram session.<br><span class="muted">${e.message}</span><br><br>Open this from the bot inside Telegram, or add <b>?dev=1:You</b> to the URL for local testing.</div>`; return; }
+  catch(e){ app.innerHTML = `<div class="pad card" style="margin:16px">Không thể xác minh phiên Telegram của bạn.<br><span class="muted">${e.message}</span><br><br>Hãy mở ứng dụng từ bot trong Telegram, hoặc thêm <b>?dev=1:Ban</b> vào URL để kiểm thử cục bộ.</div>`; return; }
   home();
 }
 
 // ---------- HOME ----------
 async function home(){
   EVENT = null;
-  app.innerHTML = `<div class="pad"><h1>Tally</h1><div class="sub">Split the tab, keep it even.</div></div>
-    <div id="list" class="pad muted">Loading…</div>`;
-  bar.innerHTML = `<button class="cta" onclick="newEventForm()">＋ New event</button>`;
+  app.innerHTML = `<div class="pad"><h1>Tally</h1><div class="sub">Chia hóa đơn, sòng phẳng với nhau.</div></div>
+    <div id="list" class="pad muted">Đang tải…</div>`;
+  bar.innerHTML = `<button class="cta" onclick="newEventForm()">＋ Sự kiện mới</button>`;
   const { events } = await api("/events");
   const list = document.getElementById("list");
-  if (!events.length){ list.innerHTML = `<div class="muted" style="text-align:center;padding:30px">No events yet. Start one for your next trip or dinner.</div>`; return; }
+  if (!events.length){ list.innerHTML = `<div class="muted" style="text-align:center;padding:30px">Chưa có sự kiện nào. Tạo một sự kiện cho chuyến đi hoặc bữa ăn sắp tới.</div>`; return; }
   list.className = "pad"; list.style.display="flex"; list.style.flexDirection="column"; list.style.gap="12px";
   list.innerHTML = events.map(e=>`
     <button class="card" style="text-align:left" onclick="openEvent('${e.id}')">
@@ -115,34 +243,40 @@ async function home(){
         <span style="font-size:17px;font-weight:700">${esc(e.title)}</span>
         <span class="mono" style="font-weight:700">${money(e.total, e.currency)}</span>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">${e.participantCount} people · ${e.expenseCount} expenses</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">${e.participantCount} người · ${e.expenseCount} khoản chi</div>
     </button>`).join("");
 }
 
 function newEventForm(){
-  app.innerHTML = `<div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">New event</span></div>
+  app.innerHTML = `<div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">Sự kiện mới</span></div>
     <div class="pad"><div class="card">
-      <div class="label">Event name</div><input id="ev-title" placeholder="Weekend in Da Nang" />
-      <div class="label" style="margin-top:14px">Currency</div><input id="ev-cur" value="$" style="width:90px" />
-      <div class="label" style="margin-top:14px">Other people (one per line)</div>
-      <textarea id="ev-names" style="height:110px" placeholder="Ben&#10;Chi&#10;Duc"></textarea>
-      <div class="muted" style="font-size:12px;margin-top:6px">You're added automatically. Others can join later from their own Telegram.</div>
+      <div class="label">Tên sự kiện</div>
+      <input id="ev-title" placeholder="Cuối tuần ở Đà Nẵng" oninput="clearErr('ev-title')" />
+      <div class="ferr" id="err-ev-title"></div>
+      <div class="label" style="margin-top:10px">Những người khác (mỗi người một dòng)</div>
+      <textarea id="ev-names" style="height:110px" placeholder="Bình&#10;Chi&#10;Đức"></textarea>
+      <div class="muted" style="font-size:12px;margin-top:6px">Bạn được thêm tự động. Những người khác có thể tham gia sau từ Telegram của họ.</div>
     </div></div>`;
-  bar.innerHTML = `<button class="cta" onclick="createEvent()">Create event</button>`;
+  bar.innerHTML = `<button class="cta" onclick="submitEvent()">Tạo sự kiện</button>`;
   setTimeout(()=>document.getElementById("ev-title").focus(),50);
 }
-async function createEvent(){
+// NB: not named `createEvent` — that shadows the native document.createEvent()
+// in inline onclick handlers (the document is in the handler's scope chain).
+async function submitEvent(){
   const title = val("ev-title").trim();
-  const currency = val("ev-cur").trim() || "$";
   const participantNames = val("ev-names").split("\n").map(s=>s.trim()).filter(Boolean);
-  if (!title) return toast("Give the event a name");
-  const ev = await api("/events",{method:"POST",body:JSON.stringify({title,currency,participantNames})});
-  EVENT = ev; renderEvent();
+  const titleErr = !title ? "Tên sự kiện là bắt buộc" : title.length > 80 ? "Tên quá dài (tối đa 80)" : "";
+  fieldError("ev-title", titleErr);
+  if (titleErr) return;
+  try {                                    // VND-only (MoMo-style): server defaults currency to ₫
+    const ev = await api("/events",{method:"POST",body:JSON.stringify({title,participantNames})});
+    EVENT = ev; renderEvent();
+  } catch(e){ toast("Không tạo được: " + e.message); }
 }
 
 // ---------- EVENT ----------
-async function openEvent(id){ EVENT = await api("/events/"+id); renderEvent(); }
-async function reload(){ EVENT = await api("/events/"+EVENT.id); renderEvent(); }
+async function openEvent(id){ try { EVENT = await api("/events/"+id); renderEvent(); } catch(e){ toast(e.message); } }
+async function reload(){ try { EVENT = await api("/events/"+EVENT.id); renderEvent(); } catch(e){ toast(e.message); } }
 
 function renderEvent(){
   const cur = EVENT.currency;
@@ -163,13 +297,13 @@ function renderEvent(){
     return `<div class="card" style="padding:14px">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <div><div style="font-size:16px;font-weight:700">${esc(x.title)}</div>
-          <div class="muted" style="font-size:13px;margin-top:3px">${esc(nameOf(x.paidBy))} paid · split ${inc.length} way${inc.length>1?"s":""}</div></div>
+          <div class="muted" style="font-size:13px;margin-top:3px">${esc(nameOf(x.paidBy))} đã trả · chia ${inc.length} người</div></div>
         <div class="mono" style="font-weight:800">${money(x.amount,cur)}</div>
       </div>
       <div class="row" style="margin-top:10px;flex-wrap:wrap">${chips}<div style="flex:1"></div>
         ${mine ? `<button class="icon" onclick="editExpense('${x.id}')">✎</button>
                   <button class="icon" style="color:var(--clay)" onclick="delExpense('${x.id}')">🗑</button>`
-               : `<span class="muted" style="font-size:11px">by ${esc(nameOf2(x.createdBy))}</span>`}
+               : `<span class="muted" style="font-size:11px">bởi ${esc(nameOf2(x.createdBy))}</span>`}
       </div></div>`;
   }).join("");
 
@@ -177,48 +311,100 @@ function renderEvent(){
     <div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">${esc(EVENT.title)}</span></div>
     <div class="pad" style="padding-top:0">
       <div class="card row" style="justify-content:space-between">
-        <div><div class="label" style="margin:0">Total spent</div>
+        <div><div class="label" style="margin:0">Tổng chi</div>
           <div class="mono" style="font-size:26px;font-weight:800">${money(EVENT.total,cur)}</div></div>
         <div class="row" style="gap:0">${EVENT.participants.map((p,i)=>`<div style="margin-left:${i?-8:0}px">${avatar(p.name,30,p.user_id===ME.id)}</div>`).join("")}</div>
       </div>
       <div class="row" style="flex-wrap:wrap;margin-top:12px">${balances}</div>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <input id="new-member" placeholder="Thêm người vào sự kiện…" style="flex:1" onkeydown="if(event.key==='Enter')addMember()" />
+        <button class="ghost" onclick="addMember()">＋ Thêm</button>
+      </div>
       ${!iAmIn && unclaimed.length ? `<div class="card" style="margin-top:12px;padding:12px">
-        <div class="muted" style="font-size:13px;margin-bottom:8px">Which one are you? Tap to join this event:</div>
+        <div class="muted" style="font-size:13px;margin-bottom:8px">Bạn là ai? Chạm để tham gia sự kiện này:</div>
         <div class="row" style="flex-wrap:wrap">${unclaimed.map(p=>`<button class="chip" style="background:var(--greenSoft);color:var(--green)" onclick="claim('${p.id}')">${esc(p.name)}</button>`).join("")}</div></div>`:""}
     </div>
     <div class="pad" style="padding-top:0">
-      <div class="label">Expenses</div>
-      <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">No expenses yet. Add the first one.</div>`}</div>
+      <div class="label">Các khoản chi</div>
+      <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">Chưa có khoản chi nào. Thêm khoản đầu tiên.</div>`}</div>
     </div>`;
   bar.innerHTML = `<div class="row">
-    <button class="cta" onclick="newExpense()">＋ Add expense</button>
-    <button class="ghost" onclick="settleView()" ${EVENT.expenses.length?"":"disabled style=opacity:.5"}>Settle</button></div>`;
+    <button class="cta" onclick="newExpense()">＋ Thêm khoản chi</button>
+    <button class="ghost" onclick="settleView()" ${EVENT.expenses.length?"":"disabled style=opacity:.5"}>Quyết toán</button></div>`;
 }
-const nameOf2 = uid => { const p = EVENT.participants.find(p=>p.user_id===uid); return p?p.name:"someone"; };
+const nameOf2 = uid => { const p = EVENT.participants.find(p=>p.user_id===uid); return p?p.name:"ai đó"; };
 
-async function claim(pid){ EVENT = await api("/events/"+EVENT.id+"/claim",{method:"POST",body:JSON.stringify({participantId:pid})}); renderEvent(); }
+async function claim(pid){ try { EVENT = await api("/events/"+EVENT.id+"/claim",{method:"POST",body:JSON.stringify({participantId:pid})}); renderEvent(); } catch(e){ toast(e.message); } }
+
+// Add a new member to the event (from the event detail screen).
+async function addMember(){
+  const el = document.getElementById("new-member");
+  const name = (el?.value || "").trim();
+  if (!name) return toast("Nhập tên người cần thêm");
+  if (name.length > 40) return toast("Tên quá dài (tối đa 40)");
+  try { EVENT = await api("/events/"+EVENT.id+"/participants",{method:"POST",body:JSON.stringify({name})}); renderEvent(); }
+  catch(e){ toast(e.message); }
+}
 
 // ---------- EXPENSE EDITOR ----------
 function newExpense(){
   DRAFT = { id:null, title:"", amount:"", paidBy:ME_participant()?.id || EVENT.participants[0].id,
-    splits: EVENT.participants.map(p=>({participantId:p.id, included:true, weight:1})) };
+    splits: EVENT.participants.map(p=>({participantId:p.id, included:true, weight:1, manual:""})),
+    payMode:"manual", payBank:"", payAccount:"", payQr:"" };
   renderEditor();
 }
 function editExpense(id){
   const x = EVENT.expenses.find(e=>e.id===id);
-  DRAFT = { id:x.id, title:x.title, amount:String(x.amount), paidBy:x.paidBy,
+  DRAFT = { id:x.id, title:x.title, amount:numToInput(x.amount, EVENT.currency), paidBy:x.paidBy,
     splits: EVENT.participants.map(p=>{ const s=x.splits.find(s=>s.participantId===p.id);
-      return {participantId:p.id, included:s?s.included:false, weight:s?s.weight:1}; }) };
+      return {participantId:p.id, included:s?s.included:false, weight:s?s.weight:1,
+        manual:(s&&s.amount!=null)?String(s.amount):""}; }),
+    payMode: x.payQr ? "image" : "manual",
+    payBank: x.payBank||"", payAccount: x.payAccount||"", payQr: x.payQr||"" };
   renderEditor();
 }
 const ME_participant = () => EVENT.participants.find(p=>p.user_id===ME.id);
 
+// ---- per-member custom amounts in "Chia cho" ----
+const isLocked = s => s.manual != null && String(s.manual).trim() !== "";
+const manualNum = s => Math.round(amountToNumber(s.manual));
+function splitDong(total, weights){                     // largest-remainder, integer đồng
+  const sum=weights.reduce((a,b)=>a+b,0);
+  if(sum<=0) return weights.map(()=>0);
+  const raw=weights.map(w=>total*w/sum);
+  const res=raw.map(Math.floor);
+  let rem=total-res.reduce((a,b)=>a+b,0);
+  const order=raw.map((v,i)=>({i,f:v-Math.floor(v)})).sort((a,b)=>b.f-a.f);
+  for(let k=0;k<rem;k++) res[order[k%order.length].i]++;
+  return res;
+}
+// Locked members keep their typed amount; the rest divide the remaining total by weight.
+function computeShares(){
+  const total = amountToNumber(DRAFT.amount);
+  const incl = DRAFT.splits.filter(s => s.included && (s.weight>0 || isLocked(s)));
+  const locked = incl.map(s => isLocked(s) ? manualNum(s) : null);
+  const lockedSum = locked.reduce((a,v)=>a+(v||0),0);
+  const autoIdx = incl.map((_,i)=>i).filter(i=>locked[i]==null);
+  const shares = {};
+  incl.forEach((s,i)=>{ if(locked[i]!=null) shares[s.participantId]=locked[i]; });
+  const auto = splitDong(Math.max(0,total-lockedSum), autoIdx.map(i=>incl[i].weight));
+  autoIdx.forEach((i,k)=> shares[incl[i].participantId]=auto[k]);
+  return { total, incl, shares, lockedSum, hasAuto: autoIdx.length>0 };
+}
+function splitAmountError(){
+  const { total, incl, lockedSum, hasAuto } = computeShares();
+  if(total<=0) return "";
+  for(const s of incl){ if(isLocked(s) && (!/^[0-9.]+$/.test(String(s.manual).trim()) || manualNum(s)<0))
+    return "Số tiền nhập không hợp lệ"; }
+  if(lockedSum > total) return "Tổng tiền nhập vượt quá số tiền khoản chi";
+  if(!hasAuto && incl.length && lockedSum !== total) return "Tổng các khoản phải bằng số tiền khoản chi";
+  return "";
+}
+
 function renderEditor(){
   const cur = EVENT.currency;
-  const amt = Number(DRAFT.amount)||0;
-  const incl = DRAFT.splits.filter(s=>s.included && s.weight>0);
-  const totalW = incl.reduce((a,s)=>a+s.weight,0);
-  const share = s => (s.included && s.weight>0 && totalW>0) ? amt*s.weight/totalW : 0;
+  const { total, shares } = computeShares();
+  const inclCount = DRAFT.splits.filter(s=>s.included).length;
 
   const payBy = EVENT.participants.map(p=>`<button class="chip" style="border:1.5px solid ${DRAFT.paidBy===p.id?"var(--green)":"var(--line)"};background:${DRAFT.paidBy===p.id?"var(--greenSoft)":"#fff"};color:${DRAFT.paidBy===p.id?"var(--green)":"var(--ink)"}" onclick="setPaid('${p.id}')">${avatar(p.name,22,DRAFT.paidBy===p.id)} ${esc(p.name)}</button>`).join("");
 
@@ -227,50 +413,131 @@ function renderEditor(){
     return `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);opacity:${s.included?1:.45}">
       <button onclick="toggle('${p.id}')" style="width:22px;height:22px;border-radius:6px;border:1.5px solid ${s.included?"var(--green)":"var(--line)"};background:${s.included?"var(--green)":"#fff"};color:#fff;font-size:13px">${s.included?"✓":""}</button>
       ${avatar(p.name,28)}<span style="font-weight:600;flex:1">${esc(p.name)}</span>
-      ${s.included?`<div class="stepper"><button onclick="wgt('${p.id}',-1)">−</button><span class="w mono">${s.weight}</span><button onclick="wgt('${p.id}',1)">＋</button></div>
-        <span class="mono" style="font-weight:700;min-width:64px;text-align:right">${money(share(s),cur)}</span>`:""}
+      ${s.included?`${isLocked(s)
+          ? `<button class="ghost" style="padding:4px 9px;font-size:13px" title="Chia tự động lại" onclick="unlockMember('${p.id}')">↺</button>`
+          : `<div class="stepper"><button onclick="wgt('${p.id}',-1)">−</button><span class="w mono">${s.weight}</span><button onclick="wgt('${p.id}',1)">＋</button></div>`}
+        <input class="mono mshare" data-pid="${p.id}" inputmode="numeric" value="${fmtVN(shares[p.id]||0)}"
+          onfocus="this.select()" oninput="onMemberAmt('${p.id}',this)" onblur="onMemberBlur()"
+          style="width:96px;text-align:right;font-weight:700;padding:6px 8px${isLocked(s)?';border-color:var(--green);background:var(--greenSoft)':''}" />`:""}
     </div>`;
   }).join("");
 
   app.innerHTML = `
-    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">${DRAFT.id?"Edit expense":"New expense"}</span></div>
+    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">${DRAFT.id?"Sửa khoản chi":"Khoản chi mới"}</span></div>
     <div class="pad" style="padding-top:0;display:flex;flex-direction:column;gap:14px">
       <div class="card">
-        <div class="label">What was it for?</div>
-        <input id="d-title" value="${esc(DRAFT.title)}" placeholder="Seafood dinner" oninput="DRAFT.title=this.value" />
-        <div class="label" style="margin-top:14px">Amount</div>
-        <div class="row"><span class="mono muted" style="font-size:20px;font-weight:700">${cur}</span>
-          <input id="d-amt" class="mono" style="font-size:20px;font-weight:700" inputmode="decimal" value="${DRAFT.amount}" placeholder="0.00"
-            oninput="DRAFT.amount=this.value.replace(/[^0-9.]/g,'');liveShares()" /></div>
-        <div class="label" style="margin-top:14px">Paid by</div>
+        <div class="label">Chi cho việc gì?</div>
+        <input id="d-title" value="${esc(DRAFT.title)}" placeholder="Bữa hải sản" oninput="DRAFT.title=this.value;clearErr('d-title')" />
+        <div class="ferr" id="err-d-title"></div>
+        <div class="label" style="margin-top:10px">Số tiền</div>
+        <div class="row"><span class="mono muted" style="font-size:20px;font-weight:700">${esc(cur)}</span>
+          <input id="d-amt" class="mono" style="font-size:20px;font-weight:700" inputmode="${isVND(cur)?"numeric":"decimal"}" value="${esc(DRAFT.amount)}" placeholder="0"
+            oninput="onAmountInput(this)" /></div>
+        <div class="ferr" id="err-d-amt"></div>
+        <div class="label" style="margin-top:10px">Người trả</div>
         <div class="row" style="flex-wrap:wrap">${payBy}</div>
       </div>
       <div class="card">
-        <div class="row" style="justify-content:space-between"><div class="label" style="margin:0">Split between</div>
-          <div class="muted" style="font-size:12px">weight <b style="color:var(--amber)">×</b> = shares</div></div>
+        <div class="row" style="justify-content:space-between"><div class="label" style="margin:0">Chia cho</div>
+          <div class="muted" style="font-size:12px">trọng số <b style="color:var(--amber)">×</b> · hoặc nhập số tiền</div></div>
         <div id="rows">${rows}</div>
+        <div class="row" style="gap:8px;padding-top:10px">
+          <input id="new-member-ed" placeholder="Thêm người…" style="flex:1" onkeydown="if(event.key==='Enter')addMemberInEditor()" />
+          <button class="ghost" onclick="addMemberInEditor()">＋ Thêm</button>
+        </div>
         <div class="row" style="justify-content:space-between;padding-top:12px;font-size:13px">
-          <span class="muted" id="wsum">${totalW} share${totalW!==1?"s":""} across ${incl.length} people</span>
-          <span class="mono" style="font-weight:700" id="atot">= ${money(amt,cur)}</span></div>
+          <span class="muted" id="wsum">Chia cho ${inclCount} người</span>
+          <span class="mono" style="font-weight:700" id="atot">= ${money(total,cur)}</span></div>
+        <div class="ferr" id="err-split">${esc(splitAmountError())}</div>
+      </div>
+      <div class="card">
+        <div class="label">Thông tin thanh toán <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· tuỳ chọn, hiện ở trang Quyết toán</span></div>
+        <div class="row" style="gap:6px;margin:10px 0 12px">
+          <button class="ghost paytab ${DRAFT.payMode==="manual"?"on":""}" onclick="setPayMode('manual')">Nhập tay</button>
+          <button class="ghost paytab ${DRAFT.payMode==="image"?"on":""}" onclick="setPayMode('image')">Ảnh QR</button>
+        </div>
+        ${DRAFT.payMode==="image"
+          ? (DRAFT.payQr
+              ? `<div style="text-align:center">
+                   <img src="${DRAFT.payQr}" alt="QR" style="max-width:210px;max-height:210px;border-radius:12px;border:1px solid var(--line)" />
+                   <div><button class="ghost" style="margin-top:10px;color:var(--clay)" onclick="clearQr()">Xoá ảnh</button></div>
+                 </div>`
+              : `<label class="ghost" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:22px;border-style:dashed;cursor:pointer">
+                   📷 Chọn ảnh QR chuyển khoản
+                   <input type="file" accept="image/*" style="display:none" onchange="onQrPick(this)" />
+                 </label>`)
+          : `<div class="label" style="margin-top:0">Ngân hàng / Ví</div>
+             <select id="pay-bank" onchange="DRAFT.payBank=this.value">${payOptions(DRAFT.payBank||"Vietcombank")}</select>
+             <div class="label" style="margin-top:12px">Số tài khoản / SĐT</div>
+             <input id="pay-acc" value="${esc(DRAFT.payAccount)}" placeholder="0123456789" inputmode="numeric" oninput="DRAFT.payAccount=this.value" />`}
       </div>
     </div>`;
-  bar.innerHTML = `<button class="cta" onclick="saveExpense()">✓ ${DRAFT.id?"Save changes":"Add expense"}</button>`;
+  bar.innerHTML = `<button class="cta" onclick="saveExpense()">✓ ${DRAFT.id?"Lưu thay đổi":"Thêm khoản chi"}</button>`;
+}
+// Add a member while editing an expense — persists to the event, then folds the
+// new person into the current draft (included, weight 1) without losing other edits.
+async function addMemberInEditor(){
+  const el = document.getElementById("new-member-ed");
+  const name = (el?.value || "").trim();
+  if (!name) return toast("Nhập tên người cần thêm");
+  if (name.length > 40) return toast("Tên quá dài (tối đa 40)");
+  try {
+    EVENT = await api("/events/"+EVENT.id+"/participants",{method:"POST",body:JSON.stringify({name})});
+    const prev = {}; DRAFT.splits.forEach(s => prev[s.participantId] = s);
+    DRAFT.splits = EVENT.participants.map(p => prev[p.id] || {participantId:p.id, included:true, weight:1, manual:""});
+    renderEditor();
+  } catch(e){ toast(e.message); }
 }
 function setPaid(id){ DRAFT.paidBy=id; renderEditor(); }
 function toggle(id){ const s=DRAFT.splits.find(x=>x.participantId===id); s.included=!s.included; renderEditor(); }
 function wgt(id,d){ const s=DRAFT.splits.find(x=>x.participantId===id); s.weight=Math.max(1,s.weight+d); renderEditor(); }
-function liveShares(){ // light update without full re-render while typing amount
-  const cur=EVENT.currency, amt=Number(DRAFT.amount)||0;
-  const incl=DRAFT.splits.filter(s=>s.included&&s.weight>0); const tw=incl.reduce((a,s)=>a+s.weight,0);
-  document.getElementById("atot").textContent = "= "+money(amt,cur);
-  document.querySelectorAll("#rows .row").forEach((row,i)=>{ const s=DRAFT.splits[i];
-    const cell=row.querySelector(".mono:last-child"); if(cell&&s.included) cell.textContent=money(tw>0?amt*s.weight/tw:0,cur); });
+// A member typed an amount → mark them locked (redistribution happens on blur).
+function onMemberAmt(pid, el){
+  const s=DRAFT.splits.find(x=>x.participantId===pid);
+  s.manual = el.value.replace(/[^0-9]/g,"");
+  el.value = s.manual;
+  const err=document.getElementById("err-split"); if(err) err.textContent = splitAmountError();
+}
+function onMemberBlur(){                                    // re-divide the others
+  const total = amountToNumber(DRAFT.amount);
+  if (total > 0) DRAFT.splits.forEach(s=>{                  // cap any fixed amount at the expense total
+    if (isLocked(s) && manualNum(s) > total) s.manual = String(total);
+  });
+  renderEditor();
+}
+function unlockMember(pid){ const s=DRAFT.splits.find(x=>x.participantId===pid); s.manual=""; renderEditor(); }
+function liveShares(){ // update auto members' shares live as the main amount is typed
+  const cur=EVENT.currency;
+  const { total, shares } = computeShares();
+  const atot=document.getElementById("atot"); if(atot) atot.textContent = "= "+money(total,cur);
+  DRAFT.splits.forEach(s=>{
+    if(!s.included || isLocked(s)) return;
+    const el=document.querySelector('.mshare[data-pid="'+s.participantId+'"]');
+    if(el && document.activeElement!==el) el.value = fmtVN(shares[s.participantId]||0);
+  });
+  const err=document.getElementById("err-split"); if(err) err.textContent = splitAmountError();
 }
 async function saveExpense(){
-  const b = { title:DRAFT.title.trim(), amount:Number(DRAFT.amount)||0, paidBy:DRAFT.paidBy, splits:DRAFT.splits };
-  if (!b.title) return toast("Add a title");
-  if (!(b.amount>0)) return toast("Add an amount");
-  if (!b.splits.some(s=>s.included)) return toast("Pick at least one person");
+  const cur = EVENT.currency;
+  const title = DRAFT.title.trim();
+  const titleErr = !title ? "Nhập tiêu đề khoản chi" : title.length > 60 ? "Tiêu đề quá dài (tối đa 60)" : "";
+  const amtErr = validateMoney(DRAFT.amount, cur);
+  const anyIncluded = DRAFT.splits.some(s=>s.included && (s.weight>0 || isLocked(s)));
+  const splitErr = !anyIncluded ? "Chọn ít nhất một người" : splitAmountError();
+  fieldError("d-title", titleErr); fieldError("d-amt", amtErr);
+  const splitBox = document.getElementById("err-split"); if (splitBox) splitBox.textContent = splitErr;
+  if (titleErr || amtErr || splitErr) return;
+  // payment info (optional): image mode keeps the QR; manual keeps bank only if an account is given
+  let payBank="", payAccount="", payQr="";
+  if (DRAFT.payMode==="image") { payQr = DRAFT.payQr || ""; }
+  else {
+    payAccount = (document.getElementById("pay-acc")?.value || "").trim();
+    payBank = payAccount ? (document.getElementById("pay-bank")?.value || "") : "";
+  }
+  const splits = DRAFT.splits.map(s=>({ participantId:s.participantId, included:s.included, weight:s.weight,
+    amount: isLocked(s) ? manualNum(s) : null }));
+  const b = { title, amount:amountToNumber(DRAFT.amount), paidBy:DRAFT.paidBy, splits,
+    payBank, payAccount, payQr };
   try{
     EVENT = DRAFT.id
       ? await api("/expenses/"+DRAFT.id,{method:"PUT",body:JSON.stringify(b)})
@@ -278,38 +545,82 @@ async function saveExpense(){
     renderEvent();
   }catch(e){ toast(e.message); }
 }
-async function delExpense(id){ if(!confirm("Delete this expense?"))return;
+async function delExpense(id){ if(!confirm("Xóa khoản chi này?"))return;
   try{ EVENT = await api("/expenses/"+id,{method:"DELETE"}); renderEvent(); }catch(e){ toast(e.message); } }
 
 // ---------- SETTLE ----------
+// Payment info for one person, gathered from their expenses (deduped).
+function payInfosFor(pid){
+  const seen=new Set(), out=[];
+  EVENT.expenses.filter(x=>x.paidBy===pid).forEach(x=>{
+    if(x.payQr){ const k="q"+x.payQr.length+x.payQr.slice(30,60); if(!seen.has(k)){seen.add(k); out.push({qr:x.payQr});} }
+    if(x.payBank&&x.payAccount){ const k="b"+x.payBank+x.payAccount; if(!seen.has(k)){seen.add(k); out.push({bank:x.payBank,account:x.payAccount});} }
+  });
+  return out;
+}
+function closeModal(el){ el.closest(".modal").remove(); }
+// Payment modal for the person receiving a transfer.
+function openPayModal(pid){
+  const p = EVENT.participants.find(x=>x.id===pid); if(!p) return;
+  const infos = payInfosFor(pid);
+  const body = infos.length ? infos.map(i => i.qr
+    ? `<div style="text-align:center;margin-top:8px"><img src="${i.qr}" alt="QR ${esc(p.name)}" onclick="showImg(this.src)"
+         style="max-width:240px;max-height:240px;border-radius:12px;border:1px solid var(--line);cursor:zoom-in" /></div>`
+    : `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+         <span class="chip" style="background:var(--paper);border:1px solid var(--line)">🏦 ${esc(i.bank)}</span>
+         <span class="mono" style="font-weight:700;font-size:16px">${esc(i.account)}</span>
+         <button class="ghost" style="padding:6px 12px" onclick="copyText('${esc(i.bank)} ${esc(i.account)} - ${esc(p.name)}')">⧉ Chép thông tin</button>
+       </div>`).join(`<div style="height:14px"></div>`)
+    : `<div class="muted" style="margin-top:8px">Người này chưa thêm thông tin nhận tiền.</div>`;
+  const o=document.createElement("div"); o.className="modal"; o.onclick=()=>o.remove();
+  o.innerHTML=`<div class="sheet" onclick="event.stopPropagation()">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div style="font-weight:800;font-size:17px">Thông tin thanh toán ${esc(p.name)}</div>
+      <button class="icon" onclick="closeModal(this)">✕</button>
+    </div>
+    ${body}
+  </div>`;
+  document.body.appendChild(o);
+}
 async function settleView(){
   const cur = EVENT.currency;
-  const rows = EVENT.settlement.length ? EVENT.settlement.map(t=>`
-    <div class="row" style="padding:10px 0;border-bottom:1px dotted var(--line)">
-      ${avatar(nameOf(t.from),26)}<span style="font-weight:700">${esc(nameOf(t.from))}</span>
-      <span class="muted">→</span>${avatar(nameOf(t.to),26)}<span style="font-weight:700">${esc(nameOf(t.to))}</span>
-      <div style="flex:1"></div><span class="mono" style="font-weight:800;color:var(--green)">${money(t.amount,cur)}</span></div>`).join("")
-    : `<div style="text-align:center;padding:20px;color:var(--green);font-weight:700">✓ All settled up.</div>`;
+  const empty = !EVENT.settlement.length;
+  const rows = EVENT.settlement.map(t=>{
+    const has = payInfosFor(t.to).length>0;
+    return `<tr>
+      <td><div class="txn">${avatar(nameOf(t.from),22)}<span style="font-weight:700">${esc(nameOf(t.from))}</span>
+        <span class="muted">→</span>${avatar(nameOf(t.to),22)}<span style="font-weight:700;color:var(--green)">${esc(nameOf(t.to))}</span></div></td>
+      <td class="amt mono">${money(t.amount,cur)}</td>
+      <td style="text-align:right;white-space:nowrap">${has
+        ? `<button class="ghost" style="padding:6px 14px" onclick="openPayModal('${t.to}')">Xem</button>`
+        : `<span class="muted" style="font-size:12px">—</span>`}</td>
+    </tr>`;
+  }).join("");
 
   const { text } = await api("/events/"+EVENT.id+"/summary");
   window.__summary = text;
   app.innerHTML = `
-    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">Settle up</span></div>
+    <div class="top"><button class="icon" onclick="renderEvent()">‹</button><span style="font-size:18px;font-weight:800">Quyết toán</span></div>
     <div class="pad" style="padding-top:0">
       <div class="card">
-        <div style="text-align:center"><div class="mono muted" style="font-size:12px;letter-spacing:2px">SETTLE UP</div>
+        <div style="text-align:center"><div class="mono muted" style="font-size:12px;letter-spacing:2px">QUYẾT TOÁN</div>
           <div style="font-weight:800;font-size:18px">${esc(EVENT.title)}</div></div>
-        <hr class="divider" />${rows}
+        <hr class="divider" />
+        ${empty
+          ? `<div style="text-align:center;padding:20px;color:var(--green);font-weight:700">✓ Đã sòng phẳng.</div>`
+          : `<div class="scrollx"><table class="settle">
+              <thead><tr><th style="width:100%">Giao dịch</th><th style="text-align:right;white-space:nowrap">Số tiền</th><th style="text-align:right">Thông tin thanh toán</th></tr></thead>
+              <tbody>${rows}</tbody></table></div>`}
       </div>
-      <div class="muted" style="text-align:center;font-size:12px;margin:10px 0">Fewest transfers to make everyone even</div>
+      <div class="muted" style="text-align:center;font-size:12px;margin:10px 0">Chạm 💳 để xem thông tin chuyển khoản của người nhận</div>
       <textarea readonly style="height:96px" onclick="this.select()">${esc(text)}</textarea>
     </div>`;
-  bar.innerHTML = `<button class="cta" onclick="copySummary()">⧉ Copy summary for the chat</button>`;
+  bar.innerHTML = `<button class="cta" onclick="copySummary()">⧉ Sao chép tóm tắt để gửi nhóm</button>`;
 }
 async function copySummary(){
   const text = window.__summary || "";
-  try{ await navigator.clipboard.writeText(text); toast("Copied — paste it in the chat"); }
-  catch{ toast("Select the text above to copy"); }
+  try{ await navigator.clipboard.writeText(text); toast("Đã sao chép — dán vào nhóm chat"); }
+  catch{ toast("Chọn đoạn văn bản trên để sao chép"); }
 }
 
 // ---------- utils ----------

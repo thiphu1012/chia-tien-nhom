@@ -25,14 +25,18 @@ src/settle.ts     Weighted-split + debt-simplification math (pure, integer cents
 public/index.html Deployable Mini App front-end (no build)
 prototype/…jsx    React design prototype (reference only)
 schema.sql        D1 tables
+docs/OVERVIEW.md  Architecture, data model, API reference, money model
 wrangler.toml     Bindings + vars (placeholders to fill in)
 ```
 
 ## Design decisions (keep these invariants)
-- **Money is integer cents everywhere in storage and math.** Convert to/from decimals
-  only at the API boundary. Never do float arithmetic on balances.
+- **Money is integer đồng everywhere in storage and math** — VND has no sub-unit, so
+  amounts are stored as whole đồng with NO ×100 scaling (`540.000 ₫` → `540000`), exactly
+  like MoMo's `Long` amount. The app is VND-only. Never do float arithmetic on balances.
+  (History: money used to be integer *cents* ×100; that was dropped because it invented
+  fractional đồng when splitting a zero-decimal currency.)
 - **Weighted splits use largest-remainder distribution** (`splitCents` in `settle.ts`)
-  so per-person shares sum to the exact total — no lost or invented pennies. There are
+  so per-person shares sum to the exact total — no lost or invented đồng. There are
   informal checks in that file's logic; keep them passing if you refactor.
 - **Settlement = greedy minimum transfers** over net balances (which sum to zero).
 - **Identity is trusted, and comes from Telegram — never from user input or an LLM.**
@@ -52,8 +56,12 @@ wrangler.toml     Bindings + vars (placeholders to fill in)
 - Secrets (`BOT_TOKEN`, `WEBHOOK_SECRET`) via `wrangler secret put`, never committed.
 
 ## Current status
-Backend + no-build Mini App are complete and deployable. Not yet done: the
-natural-language layer and the optional MCP path.
+Backend + no-build Mini App are complete and deployable (v1.1.0). The app is **VND-only**
+with money stored as integer đồng. Shipped since 1.0.0: full Vietnamese UI, add-member
+flows, fixed per-member split amounts (alongside weights), payment info per expense
+(bank/e-wallet + account, or an uploaded transfer QR) surfaced on a redesigned Quyết toán
+table, inline form validation, and docs (`README.md`, `docs/OVERVIEW.md`, `CHANGELOG.md`).
+Not yet done: the natural-language layer and the optional MCP path.
 
 ## Next steps (planned)
 1. **Natural-language "just tell the bot" layer (start here).** In the webhook, after

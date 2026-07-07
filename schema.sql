@@ -1,5 +1,6 @@
 -- Tally — expense splitter schema (Cloudflare D1 / SQLite)
--- Money is stored as integer cents to avoid floating-point drift.
+-- Money is stored as integer đồng (VND has no sub-unit), exactly like MoMo's `Long`
+-- amount. No ×100 scaling: 540.000 ₫ is stored as the integer 540000.
 
 CREATE TABLE IF NOT EXISTS users (
   id          INTEGER PRIMARY KEY,        -- Telegram user id
@@ -12,7 +13,7 @@ CREATE TABLE IF NOT EXISTS events (
   id          TEXT PRIMARY KEY,           -- uuid
   chat_id     INTEGER,                    -- Telegram chat it was created from (nullable)
   title       TEXT NOT NULL,
-  currency    TEXT NOT NULL DEFAULT '$',
+  currency    TEXT NOT NULL DEFAULT '₫',
   created_by  INTEGER NOT NULL,           -- Telegram user id
   created_at  INTEGER NOT NULL
 );
@@ -29,10 +30,13 @@ CREATE TABLE IF NOT EXISTS expenses (
   id           TEXT PRIMARY KEY,          -- uuid
   event_id     TEXT NOT NULL,
   title        TEXT NOT NULL,
-  amount_cents INTEGER NOT NULL,
+  amount_dong  INTEGER NOT NULL,          -- whole đồng, no sub-unit (MoMo-style)
   paid_by      TEXT NOT NULL,             -- participant id
   created_by   INTEGER NOT NULL,          -- Telegram user id (only this user may edit/delete)
   created_at   INTEGER NOT NULL,
+  pay_bank     TEXT,                       -- payment info: bank / e-wallet name (manual mode)
+  pay_account  TEXT,                       -- payment info: account number / phone
+  pay_qr       TEXT,                       -- payment info: attached QR image (data URL)
   FOREIGN KEY (event_id) REFERENCES events(id)
 );
 
@@ -40,7 +44,8 @@ CREATE TABLE IF NOT EXISTS splits (
   expense_id     TEXT NOT NULL,
   participant_id TEXT NOT NULL,
   included       INTEGER NOT NULL DEFAULT 1,   -- 0/1
-  weight         INTEGER NOT NULL DEFAULT 1,   -- shares this person owes
+  weight         INTEGER NOT NULL DEFAULT 1,   -- shares this person owes (auto division)
+  amount_dong    INTEGER,                       -- fixed amount for this person (đồng); NULL = auto by weight
   PRIMARY KEY (expense_id, participant_id),
   FOREIGN KEY (expense_id) REFERENCES expenses(id)
 );

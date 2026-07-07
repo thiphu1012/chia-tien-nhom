@@ -11,7 +11,7 @@ binding = "ASSETS"
 # workers.dev URL (or your custom domain) and deploy again.
 [vars]
 WEBAPP_URL = "https://tally-expense-bot.YOUR-SUBDOMAIN.workers.dev"
-# DEV_MODE = "true"   # uncomment ONLY for local testing (enables X-Dev-User bypass)
+# DEV_MODE = "true"   # local testing only — set it in .dev.vars, never here (enables X-Dev-User bypass)
 
 # D1 database binding. Fill in database_id from `wrangler d1 create tally`.
 [[d1_databases]]

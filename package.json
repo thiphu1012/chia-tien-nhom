@@ -1,6 +1,6 @@
 {
   "name": "tally-expense-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Telegram Mini App expense splitter on Cloudflare Workers + D1",
   "scripts": {

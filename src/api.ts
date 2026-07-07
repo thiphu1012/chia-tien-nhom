@@ -4,8 +4,14 @@ import { netBalances, settle, type SettleExpense } from "./settle";
 
 const uid = () => crypto.randomUUID();
 const now = () => Date.now();
-const toCents = (n: number) => Math.round(Number(n) * 100);
-const toMoney = (c: number) => c / 100;
+// Money is stored as integer đồng — VND has no sub-unit, exactly like MoMo's `Long` amount.
+// No ×100: 540.000 ₫ is stored as the integer 540000.
+const toDong = (n: number) => Math.round(Number(n));
+
+// Vietnamese number format: '.' groups thousands. Amounts are whole đồng, so no decimals.
+function fmtVN(n: number): string {
+  return Math.round(Math.abs(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -64,31 +70,36 @@ async function loadEvent(env: Env, eventId: string) {
   const expenses = expenseRows.map((e) => ({
     id: e.id,
     title: e.title,
-    amount: toMoney(e.amount_cents),
+    amount: e.amount_dong,
     paidBy: e.paid_by,
     createdBy: e.created_by,
     createdAt: e.created_at,
+    payBank: e.pay_bank || null,
+    payAccount: e.pay_account || null,
+    payQr: e.pay_qr || null,
     splits: (splitsByExpense[e.id] || []).map((s) => ({
       participantId: s.participant_id,
       included: !!s.included,
       weight: s.weight,
+      amount: s.amount_dong ?? null,
     })),
   }));
 
-  // settlement (integer cents)
+  // settlement (integer đồng)
   const forSettle: SettleExpense[] = expenseRows.map((e) => ({
-    amount: e.amount_cents,
+    amount: e.amount_dong,
     paidBy: e.paid_by,
     splits: (splitsByExpense[e.id] || []).map((s) => ({
       participantId: s.participant_id,
       included: !!s.included,
       weight: s.weight,
+      amount: s.amount_dong ?? null,
     })),
   }));
-  const netCents = netBalances(participants.map((p) => p.id), forSettle);
+  const net = netBalances(participants.map((p) => p.id), forSettle);
   const balances: Record<string, number> = {};
-  for (const [k, v] of Object.entries(netCents)) balances[k] = toMoney(v);
-  const settlement = settle(netCents).map((t) => ({ from: t.from, to: t.to, amount: toMoney(t.amount) }));
+  for (const [k, v] of Object.entries(net)) balances[k] = v;
+  const settlement = settle(net).map((t) => ({ from: t.from, to: t.to, amount: t.amount }));
 
   return {
     id: event.id,
@@ -100,15 +111,24 @@ async function loadEvent(env: Env, eventId: string) {
     expenses,
     balances,
     settlement,
-    total: toMoney(expenseRows.reduce((s, e) => s + e.amount_cents, 0)),
+    total: expenseRows.reduce((s, e) => s + e.amount_dong, 0),
   };
 }
 
 function summaryText(ev: NonNullable<Awaited<ReturnType<typeof loadEvent>>>): string {
   const name = (id: string) => ev.participants.find((p: any) => p.id === id)?.name || "?";
   const cur = ev.currency;
-  const lines = ev.settlement.map((t: any) => `${name(t.from)} → ${name(t.to)}  ${cur}${t.amount.toFixed(2)}`);
-  return `💸 ${ev.title} — settle up\n\n${lines.join("\n") || "All settled up!"}`;
+  const lines = ev.settlement.map((t: any) => `${name(t.from)} → ${name(t.to)}  ${fmtVN(t.amount)} ${cur}`);
+  // Bank/account of each person owed money (QR images can't go in plain text).
+  const creditors = ev.participants.filter((p: any) => (ev.balances[p.id] || 0) > 0.5);
+  const payLines: string[] = [];
+  for (const c of creditors) {
+    const ex = ev.expenses.find((x: any) => x.paidBy === c.id && x.payBank && x.payAccount);
+    if (ex) payLines.push(`💳 ${c.name}: ${ex.payBank} ${ex.payAccount}`);
+  }
+  const body = lines.join("\n") || "Đã sòng phẳng!";
+  const pay = payLines.length ? `\n\n${payLines.join("\n")}` : "";
+  return `💸 ${ev.title} — quyết toán\n\n${body}${pay}`;
 }
 
 // ---- router ----
@@ -143,11 +163,11 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
           `SELECT COUNT(*) AS p FROM participants WHERE event_id = ?1`,
         ).bind(e.id).first<any>();
         const tot = await env.DB.prepare(
-          `SELECT COALESCE(SUM(amount_cents),0) AS t, COUNT(*) AS n FROM expenses WHERE event_id = ?1`,
+          `SELECT COALESCE(SUM(amount_dong),0) AS t, COUNT(*) AS n FROM expenses WHERE event_id = ?1`,
         ).bind(e.id).first<any>();
         events.push({
           id: e.id, title: e.title, currency: e.currency,
-          participantCount: cnt.p, expenseCount: tot.n, total: toMoney(tot.t),
+          participantCount: cnt.p, expenseCount: tot.n, total: tot.t,
         });
       }
       return json({ events });
@@ -158,7 +178,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const body = await req.json<any>();
       const title = String(body.title || "").trim();
       if (!title) return json({ error: "title required" }, 400);
-      const currency = String(body.currency || "$").slice(0, 3) || "$";
+      const currency = String(body.currency || "₫").slice(0, 3) || "₫";
       const id = uid();
       await env.DB.prepare(
         `INSERT INTO events (id, chat_id, title, currency, created_by, created_at) VALUES (?1,?2,?3,?4,?5,?6)`,
@@ -220,11 +240,14 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const body = await req.json<any>();
       const err = validateExpense(body);
       if (err) return json({ error: err }, 400);
+      const pf = payFields(body);
+      if (typeof pf === "string") return json({ error: pf }, 400);
       const exId = uid();
       await env.DB.prepare(
-        `INSERT INTO expenses (id, event_id, title, amount_cents, paid_by, created_by, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)`,
-      ).bind(exId, eventId, String(body.title).trim(), toCents(body.amount), body.paidBy, me.id, now()).run();
+        `INSERT INTO expenses (id, event_id, title, amount_dong, paid_by, created_by, created_at, pay_bank, pay_account, pay_qr)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`,
+      ).bind(exId, eventId, String(body.title).trim(), toDong(body.amount), body.paidBy, me.id, now(),
+             pf.bank, pf.account, pf.qr).run();
       await writeSplits(env, exId, body.splits);
       return json(await loadEvent(env, eventId), 201);
     }
@@ -237,9 +260,11 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const body = await req.json<any>();
       const err = validateExpense(body);
       if (err) return json({ error: err }, 400);
+      const pf = payFields(body);
+      if (typeof pf === "string") return json({ error: pf }, 400);
       await env.DB.prepare(
-        `UPDATE expenses SET title = ?1, amount_cents = ?2, paid_by = ?3 WHERE id = ?4`,
-      ).bind(String(body.title).trim(), toCents(body.amount), body.paidBy, parts[1]).run();
+        `UPDATE expenses SET title = ?1, amount_dong = ?2, paid_by = ?3, pay_bank = ?4, pay_account = ?5, pay_qr = ?6 WHERE id = ?7`,
+      ).bind(String(body.title).trim(), toDong(body.amount), body.paidBy, pf.bank, pf.account, pf.qr, parts[1]).run();
       await env.DB.prepare(`DELETE FROM splits WHERE expense_id = ?1`).bind(parts[1]).run();
       await writeSplits(env, parts[1], body.splits);
       return json(await loadEvent(env, ex.event_id));
@@ -261,24 +286,43 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
   }
 }
 
+// Sanitize optional payment info. Returns an error string, or the cleaned fields.
+// Manual mode keeps bank only when an account is present; image mode keeps a QR data URL.
+function payFields(body: any): { bank: string | null; account: string | null; qr: string | null } | string {
+  const account = body.payAccount ? String(body.payAccount).trim().slice(0, 40) : null;
+  const bank = body.payBank ? String(body.payBank).slice(0, 40) : null;
+  const qr = body.payQr ? String(body.payQr) : null;
+  if (qr) {
+    if (qr.length > 400_000) return "Ảnh QR quá lớn (hãy dùng ảnh nhỏ hơn)";
+    if (!/^data:image\/(png|jpe?g|webp);base64,/.test(qr) && !/^https?:\/\//.test(qr)) {
+      return "Ảnh QR không hợp lệ";
+    }
+  }
+  return { bank: account ? bank : null, account, qr };
+}
+
 function validateExpense(body: any): string | null {
   if (!body || !String(body.title || "").trim()) return "title required";
   if (!(Number(body.amount) > 0)) return "amount must be positive";
   if (!body.paidBy) return "paidBy required";
-  const incl = (body.splits || []).filter((s: any) => s.included && Number(s.weight) > 0);
+  const incl = (body.splits || []).filter((s: any) =>
+    s.included && (Number(s.weight) > 0 || (s.amount != null && Number(s.amount) >= 0)));
   if (incl.length === 0) return "at least one participant must be included";
   return null;
 }
 
 async function writeSplits(env: Env, expenseId: string, splits: any[]) {
   for (const s of splits || []) {
+    const amount = (s.amount != null && isFinite(Number(s.amount)) && Number(s.amount) >= 0)
+      ? Math.round(Number(s.amount)) : null;
     await env.DB.prepare(
-      `INSERT INTO splits (expense_id, participant_id, included, weight) VALUES (?1,?2,?3,?4)`,
+      `INSERT INTO splits (expense_id, participant_id, included, weight, amount_dong) VALUES (?1,?2,?3,?4,?5)`,
     ).bind(
       expenseId,
       String(s.participantId),
       s.included ? 1 : 0,
       Math.max(1, Number(s.weight) || 1),
+      amount,
     ).run();
   }
 }

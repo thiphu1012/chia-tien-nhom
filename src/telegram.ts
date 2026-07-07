@@ -30,22 +30,22 @@ export async function handleWebhook(req: Request, env: Env): Promise<Response> {
         // In private chats an inline web_app button can open the Mini App directly.
         await tg(env, "sendMessage", {
           chat_id: chatId,
-          text: "Welcome to Tally — split event expenses and see who owes whom.\n\nTap below to open the app.",
+          text: "Chào mừng đến với Tally — chia chi phí sự kiện và xem ai nợ ai.\n\nChạm bên dưới để mở ứng dụng.",
           reply_markup: {
-            inline_keyboard: [[{ text: "💸 Open Tally", web_app: { url: env.WEBAPP_URL } }]],
+            inline_keyboard: [[{ text: "💸 Mở Tally", web_app: { url: env.WEBAPP_URL } }]],
           },
         });
       } else {
         // In groups, web_app links must come from the chat menu button (set once — see README).
         await tg(env, "sendMessage", {
           chat_id: chatId,
-          text: "Tally is ready for this group. Tap the bot's menu button (☰ next to the message box) to open the expense splitter.",
+          text: "Tally đã sẵn sàng cho nhóm này. Chạm nút menu của bot (☰ cạnh ô nhập tin nhắn) để mở công cụ chia chi phí.",
         });
       }
     } else if (text.startsWith("/help")) {
       await tg(env, "sendMessage", {
         chat_id: chatId,
-        text: "Tally splits shared expenses.\n• /start — open the app\n• Create an event, add expenses, set a weight for anyone paying for more than one share, then Settle up.",
+        text: "Tally giúp chia chi phí chung.\n• /start — mở ứng dụng\n• Tạo sự kiện, thêm khoản chi, đặt trọng số cho người trả nhiều hơn một phần, rồi bấm Quyết toán.",
       });
     }
   }
