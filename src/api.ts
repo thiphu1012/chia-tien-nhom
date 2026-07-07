@@ -176,7 +176,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
     // POST /api/events  { title, currency, participantNames: [] }
     if (parts[0] === "events" && parts.length === 1 && method === "POST") {
       const body = await req.json<any>();
-      const title = String(body.title || "").trim();
+      const title = String(body.title || "").trim().slice(0, 80);
       if (!title) return json({ error: "title required" }, 400);
       const currency = String(body.currency || "₫").slice(0, 3) || "₫";
       const id = uid();
@@ -190,7 +190,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       ).bind(uid(), id, me.first_name || "Me", me.id).run();
 
       for (const n of (body.participantNames || [])) {
-        const name = String(n).trim();
+        const name = String(n).trim().slice(0, 40);
         if (name) {
           await env.DB.prepare(
             `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
@@ -209,8 +209,9 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
 
     // POST /api/events/:id/participants { name }
     if (parts[0] === "events" && parts[2] === "participants" && method === "POST") {
+      if (!(await isMember(env, parts[1], me.id))) return json({ error: "Bạn cần tham gia sự kiện trước" }, 403);
       const body = await req.json<any>();
-      const name = String(body.name || "").trim();
+      const name = String(body.name || "").trim().slice(0, 40);
       if (!name) return json({ error: "name required" }, 400);
       await env.DB.prepare(
         `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
@@ -221,9 +222,12 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
     // POST /api/events/:id/claim { participantId }  — link myself to a name
     if (parts[0] === "events" && parts[2] === "claim" && method === "POST") {
       const body = await req.json<any>();
-      await env.DB.prepare(
-        `UPDATE participants SET user_id = ?1 WHERE id = ?2 AND event_id = ?3`,
+      // Only claim a name that's free (or already yours) — never overwrite someone else's link.
+      const res = await env.DB.prepare(
+        `UPDATE participants SET user_id = ?1
+           WHERE id = ?2 AND event_id = ?3 AND (user_id IS NULL OR user_id = ?1)`,
       ).bind(me.id, String(body.participantId), parts[1]).run();
+      if (!res.meta.changes) return json({ error: "Tên này đã có người nhận" }, 409);
       return json(await loadEvent(env, parts[1]));
     }
 
@@ -309,12 +313,33 @@ function payFields(body: any): { bank: string | null; account: string | null; qr
   return { bank: account ? bank : null, account, qr };
 }
 
+// True if the user created this event or has claimed a participant in it.
+async function isMember(env: Env, eventId: string, userId: number): Promise<boolean> {
+  const ev = await env.DB.prepare(`SELECT created_by FROM events WHERE id = ?1`).bind(eventId).first<any>();
+  if (!ev) return false;
+  if (ev.created_by === userId) return true;
+  const p = await env.DB.prepare(
+    `SELECT 1 FROM participants WHERE event_id = ?1 AND user_id = ?2 LIMIT 1`,
+  ).bind(eventId, userId).first();
+  return !!p;
+}
+
 function validateExpense(body: any): string | null {
-  if (!body || !String(body.title || "").trim()) return "title required";
+  const title = String(body?.title || "").trim();
+  if (!title) return "title required";
+  if (title.length > 60) return "title too long";
   if (!(Number(body.amount) > 0)) return "amount must be positive";
   const incl = (body.splits || []).filter((s: any) =>
     s.included && (Number(s.weight) > 0 || (s.amount != null && Number(s.amount) >= 0)));
   if (incl.length === 0) return "at least one participant must be included";
+  // Fixed per-member amounts must be non-negative and not exceed the expense total.
+  let locked = 0;
+  for (const s of incl) if (s.amount != null) {
+    const a = Math.round(Number(s.amount));
+    if (!(a >= 0)) return "split amount must be non-negative";
+    locked += a;
+  }
+  if (locked > toDong(body.amount)) return "fixed amounts exceed the total";
   return null;
 }
 

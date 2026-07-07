@@ -207,7 +207,7 @@ const initials = n => n.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase(
 function avatar(name, size=28, active){
   const bg = active ? "var(--green)" : "#DFE7E1";
   const fg = active ? "#fff" : "var(--green)";
-  return `<div class="av" style="width:${size}px;height:${size}px;font-size:${size*0.4}px;background:${bg};color:${fg}">${initials(name)}</div>`;
+  return `<div class="av" style="width:${size}px;height:${size}px;font-size:${size*0.4}px;background:${bg};color:${fg}">${esc(initials(name))}</div>`;
 }
 const app = document.getElementById("app");
 const bar = document.getElementById("bar");
