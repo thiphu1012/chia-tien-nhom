@@ -237,6 +237,11 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
     // POST /api/events/:id/expenses  { title, amount, paidBy, splits:[{participantId,included,weight}] }
     if (parts[0] === "events" && parts[2] === "expenses" && method === "POST") {
       const eventId = parts[1];
+      // Creator = payer: you must have joined this event, and you pay for what you add.
+      const mine = await env.DB.prepare(
+        `SELECT id FROM participants WHERE event_id = ?1 AND user_id = ?2 LIMIT 1`,
+      ).bind(eventId, me.id).first<any>();
+      if (!mine) return json({ error: "Bạn cần tham gia sự kiện trước khi thêm khoản chi" }, 403);
       const body = await req.json<any>();
       const err = validateExpense(body);
       if (err) return json({ error: err }, 400);
@@ -246,7 +251,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       await env.DB.prepare(
         `INSERT INTO expenses (id, event_id, title, amount_dong, paid_by, created_by, created_at, pay_bank, pay_account, pay_qr)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`,
-      ).bind(exId, eventId, String(body.title).trim(), toDong(body.amount), body.paidBy, me.id, now(),
+      ).bind(exId, eventId, String(body.title).trim(), toDong(body.amount), mine.id, me.id, now(),
              pf.bank, pf.account, pf.qr).run();
       await writeSplits(env, exId, body.splits);
       return json(await loadEvent(env, eventId), 201);
@@ -262,9 +267,10 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       if (err) return json({ error: err }, 400);
       const pf = payFields(body);
       if (typeof pf === "string") return json({ error: pf }, 400);
+      // paid_by is left unchanged — the payer is always the (unchanged) creator.
       await env.DB.prepare(
-        `UPDATE expenses SET title = ?1, amount_dong = ?2, paid_by = ?3, pay_bank = ?4, pay_account = ?5, pay_qr = ?6 WHERE id = ?7`,
-      ).bind(String(body.title).trim(), toDong(body.amount), body.paidBy, pf.bank, pf.account, pf.qr, parts[1]).run();
+        `UPDATE expenses SET title = ?1, amount_dong = ?2, pay_bank = ?3, pay_account = ?4, pay_qr = ?5 WHERE id = ?6`,
+      ).bind(String(body.title).trim(), toDong(body.amount), pf.bank, pf.account, pf.qr, parts[1]).run();
       await env.DB.prepare(`DELETE FROM splits WHERE expense_id = ?1`).bind(parts[1]).run();
       await writeSplits(env, parts[1], body.splits);
       return json(await loadEvent(env, ex.event_id));
@@ -304,7 +310,6 @@ function payFields(body: any): { bank: string | null; account: string | null; qr
 function validateExpense(body: any): string | null {
   if (!body || !String(body.title || "").trim()) return "title required";
   if (!(Number(body.amount) > 0)) return "amount must be positive";
-  if (!body.paidBy) return "paidBy required";
   const incl = (body.splits || []).filter((s: any) =>
     s.included && (Number(s.weight) > 0 || (s.amount != null && Number(s.amount) >= 0)));
   if (incl.length === 0) return "at least one participant must be included";

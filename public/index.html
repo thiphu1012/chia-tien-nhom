@@ -329,7 +329,7 @@ function renderEvent(){
       <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">Chưa có khoản chi nào. Thêm khoản đầu tiên.</div>`}</div>
     </div>`;
   bar.innerHTML = `<div class="row">
-    <button class="cta" onclick="newExpense()">＋ Thêm khoản chi</button>
+    <button class="cta" onclick="newExpense()" ${iAmIn?"":'style="opacity:.6"'} title="${iAmIn?"":"Hãy tham gia sự kiện trước"}">＋ Thêm khoản chi</button>
     <button class="ghost" onclick="settleView()" ${EVENT.expenses.length?"":"disabled style=opacity:.5"}>Quyết toán</button></div>`;
 }
 const nameOf2 = uid => { const p = EVENT.participants.find(p=>p.user_id===uid); return p?p.name:"ai đó"; };
@@ -348,7 +348,9 @@ async function addMember(){
 
 // ---------- EXPENSE EDITOR ----------
 function newExpense(){
-  DRAFT = { id:null, title:"", amount:"", paidBy:ME_participant()?.id || EVENT.participants[0].id,
+  const meP = ME_participant();               // creator = payer, so you must have joined first
+  if(!meP){ toast("Hãy chọn tên của bạn để tham gia sự kiện trước"); return; }
+  DRAFT = { id:null, title:"", amount:"", paidBy: meP.id,
     splits: EVENT.participants.map(p=>({participantId:p.id, included:true, weight:1, manual:""})),
     payMode:"manual", payBank:"", payAccount:"", payQr:"" };
   renderEditor();
@@ -406,8 +408,6 @@ function renderEditor(){
   const { total, shares } = computeShares();
   const inclCount = DRAFT.splits.filter(s=>s.included).length;
 
-  const payBy = EVENT.participants.map(p=>`<button class="chip" style="border:1.5px solid ${DRAFT.paidBy===p.id?"var(--green)":"var(--line)"};background:${DRAFT.paidBy===p.id?"var(--greenSoft)":"#fff"};color:${DRAFT.paidBy===p.id?"var(--green)":"var(--ink)"}" onclick="setPaid('${p.id}')">${avatar(p.name,22,DRAFT.paidBy===p.id)} ${esc(p.name)}</button>`).join("");
-
   const rows = EVENT.participants.map(p=>{
     const s = DRAFT.splits.find(x=>x.participantId===p.id);
     return `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);opacity:${s.included?1:.45}">
@@ -435,7 +435,7 @@ function renderEditor(){
             oninput="onAmountInput(this)" /></div>
         <div class="ferr" id="err-d-amt"></div>
         <div class="label" style="margin-top:10px">Người trả</div>
-        <div class="row" style="flex-wrap:wrap">${payBy}</div>
+        <div class="row"><span class="chip" style="background:var(--greenSoft);color:var(--green)">${avatar(nameOf(DRAFT.paidBy),22,true)} ${esc(nameOf(DRAFT.paidBy))} · bạn trả khoản này</span></div>
       </div>
       <div class="card">
         <div class="row" style="justify-content:space-between"><div class="label" style="margin:0">Chia cho</div>
@@ -488,7 +488,6 @@ async function addMemberInEditor(){
     renderEditor();
   } catch(e){ toast(e.message); }
 }
-function setPaid(id){ DRAFT.paidBy=id; renderEditor(); }
 function toggle(id){ const s=DRAFT.splits.find(x=>x.participantId===id); s.included=!s.included; renderEditor(); }
 function wgt(id,d){ const s=DRAFT.splits.find(x=>x.participantId===id); s.weight=Math.max(1,s.weight+d); renderEditor(); }
 // A member typed an amount → mark them locked (redistribution happens on blur).
