@@ -44,14 +44,32 @@ CREATE TABLE IF NOT EXISTS splits (
   expense_id     TEXT NOT NULL,
   participant_id TEXT NOT NULL,
   included       INTEGER NOT NULL DEFAULT 1,   -- 0/1
-  weight         INTEGER NOT NULL DEFAULT 1,   -- shares this person owes (auto division)
+  weight         REAL NOT NULL DEFAULT 1,      -- shares this person owes (0.5 = half share e.g. came late; 2 = covers a partner)
   amount_dong    INTEGER,                       -- fixed amount for this person (đồng); NULL = auto by weight
   PRIMARY KEY (expense_id, participant_id),
   FOREIGN KEY (expense_id) REFERENCES expenses(id)
 );
 
+-- Parsed-but-unconfirmed natural-language actions from the bot. A row is created
+-- when the LLM parses a command; it is executed only on a Yes tap, consumed
+-- atomically, and expires after a TTL. status: pending | done | cancelled | expired.
+CREATE TABLE IF NOT EXISTS pending_actions (
+  id          TEXT PRIMARY KEY,          -- short id, referenced in inline callback_data
+  chat_id     INTEGER NOT NULL,          -- Telegram chat the command came from
+  user_id     INTEGER NOT NULL,          -- only this user (the parser) may confirm
+  user_name   TEXT,                       -- sender first_name, for ensureParticipant at execute time
+  event_id    TEXT NOT NULL,
+  tool        TEXT NOT NULL,             -- 'split_expense'
+  args_json   TEXT NOT NULL,             -- resolved args: {title, amount, members:[{participantId,weight}]}
+  status      TEXT NOT NULL DEFAULT 'pending',
+  created_at  INTEGER NOT NULL,
+  FOREIGN KEY (event_id) REFERENCES events(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_creator    ON events(created_by);
+CREATE INDEX IF NOT EXISTS idx_events_chat       ON events(chat_id);
 CREATE INDEX IF NOT EXISTS idx_participants_event ON participants(event_id);
 CREATE INDEX IF NOT EXISTS idx_participants_user  ON participants(user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_event     ON expenses(event_id);
 CREATE INDEX IF NOT EXISTS idx_splits_expense     ON splits(expense_id);
+CREATE INDEX IF NOT EXISTS idx_pending_chat       ON pending_actions(chat_id);

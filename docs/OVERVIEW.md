@@ -103,6 +103,8 @@ and response bodies is in whole đồng.
 | POST   | `/api/events/:id/expenses` | add an expense (see body below) |
 | PUT    | `/api/expenses/:id` | edit an expense (creator only) |
 | DELETE | `/api/expenses/:id` | delete an expense (creator only) |
+| GET    | `/api/drafts/:id` | a parsed bill-photo draft + its event (uploader only, 60-min TTL) |
+| POST   | `/api/drafts/:id/confirm` | write the user-edited items, one expense per item (atomic) |
 
 Expense body:
 
@@ -120,6 +122,23 @@ Expense body:
   "payQr": "data:image/png;base64,..."  // optional (image mode)
 }
 ```
+
+## Bill-photo flow (receipt scanning)
+
+Send the bot a photo of a bill (private chat, or in a group with an `@mention` caption /
+reply-to-bot). The webhook downloads the largest photo size, has the Workers AI vision
+model (`AI_VISION_MODEL`) transcribe line items **verbatim as printed**, and normalizes
+them in `src/receipt.ts` — printed `540.000` is parsed with dot/comma as *thousands*
+separators, so it lands as the integer `540000` đồng. Only line items and the printed
+total are extracted; VAT / service fees / discounts are deferred (not itemized yet), so a
+bill with tax/fees reads as "unreconciled" — surfaced as a soft note, not an error. The result is stored as a
+`pending_actions` row (`tool='receipt_items'`, 60-min TTL) and the bot replies with a
+button that deep-links into the Mini App review screen (`?draft=<id>` in private chats,
+`https://t.me/<bot>?startapp=draft_<id>` in groups). There the uploader edits items,
+taps members onto each item, sets per-member weights (half-steps: 0.5 came late, 2 covers
+a partner), and confirms — the server validates the **user-edited** payload, consumes the
+draft atomically, and inserts one expense per item in a single D1 batch (all-or-nothing).
+The model never writes money and never sets identity; the uploader is the payer.
 
 ## Invariants to preserve
 

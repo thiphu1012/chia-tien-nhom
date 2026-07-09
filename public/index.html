@@ -224,7 +224,18 @@ const nameOf = id => EVENT?.participants.find(p=>p.id===id)?.name || "?";
 async function start(){
   try { ME = await api("/me"); }
   catch(e){ app.innerHTML = `<div class="pad card" style="margin:16px">Không thể xác minh phiên Telegram của bạn.<br><span class="muted">${e.message}</span><br><br>Hãy mở ứng dụng từ bot trong Telegram, hoặc thêm <b>?dev=1:Ban</b> vào URL để kiểm thử cục bộ.</div>`; return; }
+  // Deep link from a bot-parsed bill photo: ?draft=<id> (private-chat web_app
+  // button) or startapp=draft_<id> (t.me link used in groups).
+  const draftId = draftIdFromLaunch();
+  if (draftId) return reviewDraft(draftId);
   home();
+}
+
+function draftIdFromLaunch(){
+  const q = new URLSearchParams(location.search).get("draft");
+  if (q) return q;
+  const sp = tg?.initDataUnsafe?.start_param || "";
+  return sp.startsWith("draft_") ? sp.slice(6) : null;
 }
 
 // ---------- HOME ----------
@@ -489,7 +500,9 @@ async function addMemberInEditor(){
   } catch(e){ toast(e.message); }
 }
 function toggle(id){ const s=DRAFT.splits.find(x=>x.participantId===id); s.included=!s.included; renderEditor(); }
-function wgt(id,d){ const s=DRAFT.splits.find(x=>x.participantId===id); s.weight=Math.max(1,s.weight+d); renderEditor(); }
+// Weights move in half-share steps: 0.5 (đến muộn) … 20 (2 = trả cho cả người đi kèm).
+function stepWeight(w,d){ return Math.min(20, Math.max(0.5, Math.round((w+d*0.5)*2)/2)); }
+function wgt(id,d){ const s=DRAFT.splits.find(x=>x.participantId===id); s.weight=stepWeight(s.weight,d); renderEditor(); }
 // A member typed an amount → mark them locked (redistribution happens on blur).
 function onMemberAmt(pid, el){
   const s=DRAFT.splits.find(x=>x.participantId===pid);
@@ -546,6 +559,109 @@ async function saveExpense(){
 }
 async function delExpense(id){ if(!confirm("Xóa khoản chi này?"))return;
   try{ EVENT = await api("/expenses/"+id,{method:"DELETE"}); renderEvent(); }catch(e){ toast(e.message); } }
+
+// ---------- RECEIPT REVIEW (bill photo → items → members) ----------
+// Opened via deep link after the bot parses a bill photo. The model's parse is
+// only a pre-fill: every field here is editable, and only the user-confirmed
+// payload is written — one expense per item, payer = the uploader.
+let RD = null; // { id, items:[{title, amountDong, inc:{pid:bool}}], weights:{pid:w}, totalDong, reconciled }
+
+async function reviewDraft(id){
+  app.innerHTML = `<div class="pad muted">Đang tải hoá đơn…</div>`; bar.innerHTML = "";
+  let res;
+  try { res = await api("/drafts/"+id); }
+  catch(e){
+    app.innerHTML = `<div class="pad"><div class="card" style="text-align:center;padding:26px">
+      🧾 ${esc(e.message)}<br><br><button class="ghost" onclick="home()">Về trang chính</button></div></div>`;
+    return;
+  }
+  EVENT = res.event;
+  const d = res.draft;
+  const allOn = () => Object.fromEntries(EVENT.participants.map(p=>[p.id,true]));
+  RD = { id, totalDong:d.totalDong, reconciled:d.reconciled, weights:{}, items:[] };
+  EVENT.participants.forEach(p=>RD.weights[p.id]=1);
+  // Everyone in by default: right for the shared-pot case, and the café case is
+  // just taps to narrow each item down to its person. VAT/fees aren't itemized yet.
+  RD.items = (d.items||[]).map(it=>({ title:String(it.name||""), amountDong:Number(it.amountDong)||0, inc:allOn() }));
+  renderReview();
+}
+
+function rdItemsSum(){ return RD.items.reduce((a,b)=>a+(b.amountDong||0),0); }
+
+function renderReview(){
+  const rows = RD.items.map((it,i)=>{
+    const chips = EVENT.participants.map(p=>{
+      const on = !!it.inc[p.id];
+      return `<button class="chip" onclick="rdToggle(${i},'${p.id}')" style="cursor:pointer;${on?"background:var(--greenSoft);color:var(--green)":"opacity:.5"}">${avatar(p.name,20,on)} ${esc(p.name)}</button>`;
+    }).join("");
+    return `<div class="card">
+      <div class="row" style="gap:8px">
+        <input value="${esc(it.title)}" placeholder="Tên món" style="flex:1;font-weight:600" oninput="RD.items[${i}].title=this.value" />
+        <input class="mono" inputmode="numeric" value="${it.amountDong?fmtVN(it.amountDong):""}" placeholder="0"
+          style="width:110px;text-align:right;font-weight:700" oninput="rdAmt(${i},this)" />
+        <button class="icon" title="Xoá món" onclick="rdDel(${i})" style="color:var(--clay)">✕</button>
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${chips}</div>
+    </div>`;
+  }).join("");
+
+  const wrow = EVENT.participants.map(p=>`
+    <div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">
+      ${avatar(p.name,24)}<span style="font-weight:600;flex:1">${esc(p.name)}</span>
+      <div class="stepper"><button onclick="rdWgt('${p.id}',-1)">−</button><span class="w mono">${RD.weights[p.id]}</span><button onclick="rdWgt('${p.id}',1)">＋</button></div>
+    </div>`).join("");
+
+  app.innerHTML = `
+    <div class="top"><button class="icon" onclick="home()">‹</button><span style="font-size:18px;font-weight:800">🧾 Hoá đơn — ${esc(EVENT.title)}</span></div>
+    <div class="pad" style="padding-top:0;display:flex;flex-direction:column;gap:14px">
+      <div class="card row" style="justify-content:space-between;font-size:13px">
+        <span class="muted">Tổng trên hoá đơn</span>
+        <span class="mono" style="font-weight:700">${money(RD.totalDong)}</span>
+      </div>
+      ${RD.reconciled?"":`<div class="card" style="border-color:var(--amber);color:var(--amber);font-size:12.5px">Các món cộng lại chưa khớp tổng hoá đơn — thường do thuế/phí (chưa tính riêng) hoặc máy đọc sai. Kiểm tra số tiền từng món; thêm dòng phí nếu muốn chia cả phí.</div>`}
+      <div class="card">
+        <div class="label">Trọng số mỗi người <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· 0,5 đến muộn — 2 trả cho cả người đi kèm</span></div>
+        ${wrow}
+      </div>
+      <div class="label" style="padding:0 2px">Món đã đọc — chạm tên để chọn ai dùng món nào</div>
+      ${rows}
+      <button class="ghost" onclick="rdAdd()">＋ Thêm món</button>
+      <div class="card row" style="justify-content:space-between">
+        <span class="muted">Tổng các món</span>
+        <span class="mono" style="font-weight:800" id="rd-sum">${money(rdItemsSum())}</span>
+      </div>
+    </div>`;
+  bar.innerHTML = `<button class="cta" onclick="rdSave()">✅ Lưu ${RD.items.length} khoản chi</button>`;
+}
+
+function rdToggle(i,pid){ RD.items[i].inc[pid] = !RD.items[i].inc[pid]; renderReview(); }
+function rdWgt(pid,d){ RD.weights[pid] = stepWeight(RD.weights[pid]||1, d); renderReview(); }
+function rdDel(i){ RD.items.splice(i,1); renderReview(); }
+function rdAdd(){ RD.items.push({ title:"", amountDong:0, inc:Object.fromEntries(EVENT.participants.map(p=>[p.id,true])) }); renderReview(); }
+function rdAmt(i, el){ // digits only (VND); live-update the footer sum without a re-render
+  const digits = el.value.replace(/[^0-9]/g,"").slice(0,12);
+  RD.items[i].amountDong = Number(digits)||0;
+  el.value = digits ? fmtVN(Number(digits)) : "";
+  const sum = document.getElementById("rd-sum"); if (sum) sum.textContent = money(rdItemsSum());
+}
+
+async function rdSave(){
+  for (const it of RD.items){
+    if (!it.title.trim()) return toast("Mỗi món cần có tên");
+    if (!(it.amountDong>0)) return toast("Số tiền của '"+(it.title.trim()||"món")+"' chưa hợp lệ");
+    if (!EVENT.participants.some(p=>it.inc[p.id])) return toast("Chưa chọn người cho '"+it.title.trim()+"'");
+  }
+  const items = RD.items.map(it=>({
+    title: it.title.trim(), amountDong: it.amountDong,
+    splits: EVENT.participants.map(p=>({ participantId:p.id, included:!!it.inc[p.id], weight:RD.weights[p.id]||1 })),
+  }));
+  try{
+    const res = await api("/drafts/"+RD.id+"/confirm",{method:"POST",body:JSON.stringify({items})});
+    EVENT = res.event; RD = null;
+    renderEvent();
+    toast("Đã lưu "+res.saved+" khoản chi 🎉");
+  }catch(e){ toast(e.message); }
+}
 
 // ---------- SETTLE ----------
 // Payment info for one person, gathered from their expenses (deduped).
