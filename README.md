@@ -65,6 +65,10 @@ http://localhost:8787/?dev=1:Aya
 
 ## Deploy to production
 
+> For a step-by-step infrastructure walkthrough (BotFather, D1, Workers AI, secrets, webhook,
+> menu button, verification, and troubleshooting), see **[`docs/SETUP.md`](docs/SETUP.md)**.
+> The condensed version follows.
+
 You'll need a Cloudflare account (free) and a bot token from [@BotFather](https://t.me/BotFather).
 
 ```bash
@@ -95,6 +99,39 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/setChatMenuButton" \
 
 Message your bot **/start**, tap **Mở Tally**, and create an event.
 
+## Natural-language commands (bot)
+
+Beyond the Mini App, the bot understands plain-text splits like
+**"chia 540k cho Aya, Ben tính đôi"** — it parses them with **Cloudflare Workers AI**
+(no external key; billed via your Cloudflare account, 10k Neurons/day free) and **always
+asks for a Yes/No confirmation before writing**.
+
+- Set **`BOT_USERNAME`** in `wrangler.toml` to your bot's @username (without the `@`).
+  In group chats the bot keeps Telegram privacy mode **on**, so it only acts on messages
+  addressed to it (`@YourBot chia …`) or replies to it.
+- Pick the parser model via **`AI_MODEL`** (any function-calling Workers AI model; swappable
+  with no code change). The `[ai]` binding is already in `wrangler.toml`.
+- Per group chat, run **/tally** once to pick which event the chat is bound to.
+- **`WEBHOOK_SECRET` is now required** — the webhook fails closed (rejects all updates) if it
+  is unset, since callback taps execute money writes. To exercise the webhook locally, add
+  `WEBHOOK_SECRET="…"` to `.dev.vars` and send it as the `X-Telegram-Bot-Api-Secret-Token`
+  header on your test POSTs.
+
+## Bill-photo scanning (bot)
+
+Send the bot a **photo of a bill** (in a group: with an `@YourBot` caption or as a reply
+to the bot) and it reads the line items with a **Workers AI vision model**
+(`AI_VISION_MODEL` in `wrangler.toml`, free tier), then replies with a button that opens
+a **review screen** in the Mini App: fix any misread names/amounts, tap who had each item,
+set weights (0,5 for someone who came late — ×2 for someone covering a partner), and save.
+Each item becomes a normal expense paid by the uploader. Nothing is written until you
+confirm; drafts expire after 60 minutes.
+
+> **Group deep links:** the review button in group chats uses
+> `https://t.me/<bot>?startapp=…`, which requires enabling your bot's **Main Mini App**
+> in BotFather (*Bot Settings → Configure Mini App*) pointed at your Worker URL. Private
+> chats work without this.
+
 ## Scripts
 
 | Command | What it does |
@@ -108,10 +145,11 @@ Message your bot **/start**, tap **Mở Tally**, and create an event.
 
 ```
 src/index.ts      Worker entry: routing, CORS, static-asset fallback
-src/telegram.ts   /webhook handler + Telegram Bot API helper
+src/telegram.ts   /webhook handler + Telegram Bot API helper (NL splits, bill photos)
 src/initData.ts   Verifies Telegram Web App initData (HMAC-SHA256)
-src/api.ts        REST API: events, participants, expenses, splits, payment info, settle
+src/api.ts        REST API: events, participants, expenses, splits, payment info, settle, drafts
 src/settle.ts     Weighted + fixed-amount split, debt simplification (pure integer đồng)
+src/receipt.ts    Bill-photo parsing: vision model transcribes, pure code does the numbers
 public/index.html The deployable Mini App front-end (no build, Vietnamese UI)
 schema.sql        D1 tables
 docs/OVERVIEW.md  Architecture, data model, API reference, money model

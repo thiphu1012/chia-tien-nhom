@@ -18,10 +18,12 @@ minimum set of transfers to settle up. Built to run inside Telegram group chats.
 ## File map
 ```
 src/index.ts      Worker entry: routing, CORS, static-asset fallback
-src/telegram.ts   /webhook handler + Telegram Bot API helper (tg())
+src/telegram.ts   /webhook handler + bot API helper (tg()); NL splits + bill-photo flow
 src/initData.ts   Verifies Telegram Web App initData (HMAC-SHA256) -> trusted user
-src/api.ts        REST API: events, participants, expenses, splits, claim, summary
-src/settle.ts     Weighted-split + debt-simplification math (pure, integer cents)
+src/api.ts        REST API: events, participants, expenses, splits, claim, summary, drafts
+src/settle.ts     Weighted-split + debt-simplification math (pure, integer đồng)
+src/nl.ts         NL layer: "chia 540k cho Aya, Ben" -> split_expense args (pure + 1 AI call)
+src/receipt.ts    Bill-photo layer: vision parse -> line items (pure + 1 AI call)
 public/index.html Deployable Mini App front-end (no build)
 prototype/…jsx    React design prototype (reference only)
 schema.sql        D1 tables
@@ -56,29 +58,37 @@ wrangler.toml     Bindings + vars (placeholders to fill in)
 - Secrets (`BOT_TOKEN`, `WEBHOOK_SECRET`) via `wrangler secret put`, never committed.
 
 ## Current status
-Backend + no-build Mini App are complete and deployable (v1.1.0). The app is **VND-only**
-with money stored as integer đồng. Shipped since 1.0.0: full Vietnamese UI, add-member
-flows, fixed per-member split amounts (alongside weights), payment info per expense
-(bank/e-wallet + account, or an uploaded transfer QR) surfaced on a redesigned Quyết toán
-table, inline form validation, and docs (`README.md`, `docs/OVERVIEW.md`, `CHANGELOG.md`).
-Not yet done: the natural-language layer and the optional MCP path.
+Backend + no-build Mini App are complete and deployable. The app is **VND-only** with
+money stored as integer đồng. Shipped since 1.0.0: full Vietnamese UI, add-member flows,
+fixed per-member split amounts (alongside weights), payment info per expense, inline
+validation, the **natural-language layer** (`src/nl.ts` — Workers AI function calling with
+an inline Yes/No confirm card via `pending_actions`), and the **bill-photo flow**
+(`src/receipt.ts` — photo in chat → Workers AI vision parse → `pending_actions` draft →
+Mini App review screen at `?draft=<id>` → confirm writes 1 expense per item in one D1
+batch). Weights are `REAL` in half-steps (0.5 = came late, 2 = covers a partner).
+Not yet done: the optional MCP path.
+
+## Bill-photo flow invariants (keep these too)
+- The vision model returns amounts **as printed strings**; only `parsePrintedAmount` in
+  `src/receipt.ts` converts them (dot/comma are THOUSANDS separators — `540.000` = 540000).
+  Never let `parseFloat`/`Number` near a printed amount.
+- The model's parse is a pre-fill. The **user-edited payload** from the review screen is
+  what gets validated and written; drafts are consumed atomically and expire in 60 min.
+- Model-derived strings (item names) are untrusted: `esc()` on render, cap/sanitize on write.
+- **VAT / service fees / discounts are deliberately NOT modeled yet** — the OCR path
+  extracts line items + the printed total only. `reconciled` (Σ items === printed total)
+  is just an FYI flag; a bill with tax/fees will read as unreconciled, and the review
+  screen shows that as a soft "chênh lệch do thuế/phí" note, not an error.
 
 ## Next steps (planned)
-1. **Natural-language "just tell the bot" layer (start here).** In the webhook, after
-   the trusted Telegram user and message text are known, call an LLM with tool/function
-   definitions and let it map e.g. "split 540k among Aya, Ben, Chi" to a tool call.
-   - Tools to expose (few, goal-shaped): `split_expense`, `add_expense`, `settle_up`.
-   - Pass the event's participant list into the prompt for name→ID resolution; in groups,
-     prefer resolving `@mentions` from Telegram message entities (real user IDs).
-   - **Confirm before writing** any money mutation: reply with an inline Yes/No keyboard
-     summarizing the parsed action; only commit on Yes.
-   - Identity stays trusted (see invariant above) — the model never sets the user.
-   - Model options: Anthropic Messages API with `tools` (native function calling), or
-     Cloudflare Workers AI to stay on-platform.
-2. **Optional: MCP server (Option B).** Wrap the same three tools as a remote MCP server
-   using Cloudflare's Agents SDK (`createMcpHandler` / `McpAgent`, Streamable HTTP at
-   `/mcp`), so the tools are reusable by other MCP clients (Claude Desktop, etc.). The
-   tool schemas from step 1 should map over almost 1:1. Only do this if reuse is wanted.
+1. **Bill-photo accuracy pass.** Collect real VN receipts; if the free Workers AI vision
+   model misreads too often (watch the review screen's edit rate), swap `AI_VISION_MODEL`
+   or add a paid Claude-via-AI-Gateway provider behind the same `src/receipt.ts` seam —
+   see `brainstorm/bill-ocr-model-picking.html` for the researched comparison.
+2. **Optional: MCP server (Option B).** Wrap the bot's tools (`split_expense`, receipt
+   parsing) as a remote MCP server using Cloudflare's Agents SDK (`createMcpHandler` /
+   `McpAgent`, Streamable HTTP at `/mcp`), so they're reusable by other MCP clients
+   (Claude Desktop, etc.). Only do this if reuse is wanted.
 3. Consider posting the settle-up summary straight into the group chat (Telegram
    `answerWebAppQuery` / `sendMessage`) instead of copy-paste.
 

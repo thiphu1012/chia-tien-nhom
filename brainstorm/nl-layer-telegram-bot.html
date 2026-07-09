@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tally — Natural-Language Bot Layer (Design Brainstorm)</title>
+<style>
+  :root {
+    --bg: #f7f6f2;
+    --panel: #ffffff;
+    --ink: #1c1a17;
+    --muted: #6b6560;
+    --line: #e4e0d8;
+    --accent: #c65d3b;      /* terracotta */
+    --accent-soft: #f3e3dc;
+    --good: #2f7d5b;
+    --good-soft: #e2f0e8;
+    --warn: #b8860b;
+    --code-bg: #f0ede6;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17150f;
+      --panel: #201d16;
+      --ink: #f0ebe2;
+      --muted: #a49c8f;
+      --line: #322d24;
+      --accent: #e0794f;
+      --accent-soft: #3a271d;
+      --good: #6fce9f;
+      --good-soft: #1e2e26;
+      --warn: #d8ab4a;
+      --code-bg: #14120d;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#f7f6f2; --panel:#fff; --ink:#1c1a17; --muted:#6b6560; --line:#e4e0d8;
+    --accent:#c65d3b; --accent-soft:#f3e3dc; --good:#2f7d5b; --good-soft:#e2f0e8;
+    --warn:#b8860b; --code-bg:#f0ede6; --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+  }
+  :root[data-theme="dark"] {
+    --bg:#17150f; --panel:#201d16; --ink:#f0ebe2; --muted:#a49c8f; --line:#322d24;
+    --accent:#e0794f; --accent-soft:#3a271d; --good:#6fce9f; --good-soft:#1e2e26;
+    --warn:#d8ab4a; --code-bg:#14120d; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 22px 96px; }
+  header.hero { margin-bottom: 34px; }
+  .kicker {
+    display: inline-block; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; margin-bottom: 10px;
+  }
+  h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.12; margin: 0 0 12px; letter-spacing: -.02em; }
+  h1 .em { font-style: italic; color: var(--accent); }
+  .lede { font-size: 18px; color: var(--muted); max-width: 62ch; margin: 0; }
+
+  h2 {
+    font-size: 22px; margin: 44px 0 14px; letter-spacing: -.01em;
+    padding-bottom: 8px; border-bottom: 2px solid var(--line);
+  }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 0 0 14px; }
+  .muted { color: var(--muted); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px 22px; box-shadow: var(--shadow); margin: 16px 0;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+    border: 1px solid transparent;
+  }
+  .pill.good { background: var(--good-soft); color: var(--good); }
+  .pill.line { background: transparent; border-color: var(--line); color: var(--muted); }
+
+  ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 8px 0; }
+  ol.steps > li {
+    counter-increment: s; position: relative; padding: 14px 16px 14px 56px; margin: 10px 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  }
+  ol.steps > li::before {
+    content: counter(s); position: absolute; left: 14px; top: 14px;
+    width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff;
+    display: grid; place-items: center; font-weight: 700; font-size: 14px;
+  }
+  ol.steps > li b { display: block; margin-bottom: 2px; }
+
+  code { background: var(--code-bg); padding: 1.5px 6px; border-radius: 6px; font-size: 13.5px;
+    font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; overflow-x: auto; margin: 12px 0; font-size: 13px; line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  td .rec { color: var(--good); font-weight: 700; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .callout {
+    border-radius: 12px; padding: 14px 16px; margin: 16px 0; border: 1px solid var(--line);
+    background: var(--accent-soft);
+  }
+  .callout.invariant { background: var(--good-soft); }
+  .callout .h { font-weight: 700; margin-bottom: 4px; display:flex; align-items:center; gap:8px; }
+
+  .toggle {
+    position: fixed; top: 14px; right: 14px; z-index: 10;
+    background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 999px; padding: 7px 12px; font-size: 13px; cursor: pointer; box-shadow: var(--shadow);
+  }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  ul.tight { margin: 6px 0 14px; padding-left: 20px; }
+  ul.tight li { margin: 4px 0; }
+  .filerow { font-family: "SF Mono", ui-monospace, monospace; font-size: 13px; }
+  .tag { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+  /* ── Review findings ── */
+  .sev {
+    display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 6px; margin-right: 8px;
+    vertical-align: 1px;
+  }
+  .sev.crit { background: var(--accent); color: #fff; }
+  .sev.risk { background: transparent; color: var(--warn); border: 1.5px solid var(--warn); }
+  .sev.debt { background: transparent; color: var(--muted); border: 1.5px solid var(--line); }
+  .finding { border-left: 4px solid var(--line); }
+  .finding.crit { border-left-color: var(--accent); }
+  .finding.risk { border-left-color: var(--warn); }
+  .finding h3 { margin-top: 0; }
+  .decide-box {
+    margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+    background: var(--code-bg); border: 1px dashed var(--warn); font-size: 14px;
+  }
+  .decide-box b { color: var(--warn); }
+  .fix-box {
+    margin-top: 10px; padding: 12px 14px; border-radius: 10px;
+    background: var(--good-soft); border: 1px solid var(--good); font-size: 14px;
+  }
+  .fix-box > b { color: var(--good); }
+  .fix-box pre { margin: 10px 0 0; background: var(--code-bg); }
+  .fix-box ul.tight { margin-bottom: 0; }
+
+  /* ── Sequence diagram (inline SVG, theme-aware) ── */
+  .seqwrap {
+    overflow-x: auto; margin: 14px 0; border: 1px solid var(--line);
+    border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); padding: 4px;
+  }
+  svg.seq { display: block; min-width: 720px; width: 100%; height: auto;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  svg.seq .actorBox  { fill: var(--accent-soft); stroke: var(--accent); }
+  svg.seq .actorLabel{ fill: var(--ink); font-weight: 700; font-size: 13px; }
+  svg.seq .actorSub  { fill: var(--muted); font-size: 10.5px; }
+  svg.seq .lifeline  { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 3 6; }
+  svg.seq .band      { fill: var(--code-bg); }
+  svg.seq .bandText  { fill: var(--accent); font-weight: 700; font-size: 11px; letter-spacing: .07em; }
+  svg.seq .call      { stroke: var(--accent); stroke-width: 1.7; }
+  svg.seq .ret       { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 5 4; }
+  svg.seq .lbl       { fill: var(--ink); font-size: 11.5px; }
+  svg.seq .ahFill    { fill: var(--accent); }
+  svg.seq .ahMuted   { fill: var(--muted); }
+  svg.seq .noteBox   { fill: var(--good-soft); stroke: var(--good); }
+  svg.seq .noteText  { fill: var(--ink); font-size: 10.5px; font-weight: 600; }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin:8px 2px 0; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .swatch { width:22px; height:0; border-top-width:2px; border-top-style:solid; display:inline-block; }
+</style>
+</head>
+<body>
+<button class="toggle" id="themeToggle" aria-label="Toggle theme">◑ Theme</button>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="kicker">Design Brainstorm · Tally</span>
+    <h1>The <span class="em">"just tell the bot"</span> layer</h1>
+    <p class="lede">Turning free-text messages like <em>"split 540k among Aya, Ben, and Chi"</em> into confirmed expense splits — powered by Cloudflare Workers AI, gated by a Yes/No confirmation, and writing through the same math the Mini App already uses.</p>
+  </header>
+
+  <div class="card">
+    <span class="tag">Decisions locked in</span>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
+      <span class="pill">Provider · Cloudflare Workers AI</span>
+      <span class="pill">Scope · <code>split_expense</code> only (first cut)</span>
+      <span class="pill line">Model · TBD (see comparison)</span>
+      <span class="pill good">Confirm-before-write · required</span>
+    </div>
+  </div>
+
+  <h2>1 · The mental model</h2>
+  <p>The model is a <strong>parser / router</strong>, never the source of truth. The whole feature is four moves:</p>
+  <ol class="steps">
+    <li><b>Parse</b> Worker sends the message text + the event's participant list + the <code>split_expense</code> tool definition to Workers AI. It returns <em>one tool call</em> with filled-in arguments (amount, who's included, weights) — or nothing if it didn't understand.</li>
+    <li><b>Confirm</b> Worker replies with an inline <strong>✅ Yes / ❌ No</strong> keyboard summarizing the parsed split. <strong>No money is written yet.</strong></li>
+    <li><b>Execute</b> Only when the user taps <strong>Yes</strong>, the Worker runs the <em>same</em> pure DB operation the Mini App uses. Settlement math stays in <code>settle.ts</code>.</li>
+    <li><b>Reply</b> Worker posts the result back into the chat.</li>
+  </ol>
+
+  <div class="callout invariant">
+    <div class="h">🔒 Non-negotiable invariants (from CLAUDE.md)</div>
+    <ul class="tight">
+      <li><strong>Identity is never from the model.</strong> The payer / acting user is <code>update.message.from</code>, authenticated by Telegram via your webhook secret. The model may fill <em>amount &amp; members</em>, never <em>who</em>.</li>
+      <li><strong>Money stays integer đồng.</strong> The model normalizes <code>540k → 540000</code>; no float math ever touches balances.</li>
+      <li><strong>Every money mutation is confirmed</strong> before the write.</li>
+    </ul>
+  </div>
+
+  <h2>2 · Where the "LLM" lives</h2>
+  <p>No model runs on your server. Your Cloudflare Worker stays a thin orchestrator and makes one call to the on-platform <code>env.AI</code> binding at request time.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3>Runtime call</h3>
+      <p class="muted" style="margin-bottom:8px">Workers AI function-calling contract — note this is <em>not</em> Anthropic's shape.</p>
+      <pre><code>const r = await env.AI.run(env.AI_MODEL, {
+  messages: [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user",   content: text },
+  ],
+  tools: [SPLIT_EXPENSE_TOOL],
+});
+// read: r.tool_calls?.[0]  → { name, arguments }</code></pre>
+    </div>
+    <div class="card">
+      <h3>Dev vs Prod (orthogonal to model)</h3>
+      <ul class="tight">
+        <li><b>Dev</b> — <code>wrangler dev</code>, <code>[ai] binding = "AI"</code> in <code>wrangler.toml</code>, POST it fake Telegram updates. <code>DEV_MODE</code> only affects the <em>Mini App</em> auth bypass, not the bot.</li>
+        <li><b>Prod</b> — <code>npm run deploy</code>, same code. Workers AI needs no external key; it's billed via your Cloudflare account.</li>
+      </ul>
+      <p class="muted" style="margin:0">The model is a <strong>one-line string</strong> behind the binding — plan it as an <code>AI_MODEL</code> var so you can swap or A/B it with no code change.</p>
+    </div>
+  </div>
+
+  <h2>3 · End-to-end flow (sequence)</h2>
+  <p class="muted">The five entities and the messages between them, top to bottom. Assumes an event is already bound to this chat via <code>/tally</code>; if none is bound, the bot replies "chạy /tally trước" instead of parsing.</p>
+
+  <div class="seqwrap">
+    <svg class="seq" viewBox="0 0 960 840" role="img" aria-label="Sequence diagram of the split_expense flow">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="9" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" class="ahFill"/>
+        </marker>
+        <marker id="ahm" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="9" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" class="ahMuted"/>
+        </marker>
+      </defs>
+
+      <!-- Actor headers -->
+      <g>
+        <rect class="actorBox" x="28"  y="14" width="124" height="30" rx="8"/>
+        <text class="actorLabel" x="90"  y="34" text-anchor="middle">🙋 User</text>
+        <text class="actorSub"   x="90"  y="60" text-anchor="middle">group member</text>
+
+        <rect class="actorBox" x="223" y="14" width="124" height="30" rx="8"/>
+        <text class="actorLabel" x="285" y="34" text-anchor="middle">Telegram</text>
+        <text class="actorSub"   x="285" y="60" text-anchor="middle">Bot API</text>
+
+        <rect class="actorBox" x="418" y="14" width="124" height="30" rx="8"/>
+        <text class="actorLabel" x="480" y="34" text-anchor="middle">Worker</text>
+        <text class="actorSub"   x="480" y="60" text-anchor="middle">/webhook · Cloudflare</text>
+
+        <rect class="actorBox" x="628" y="14" width="124" height="30" rx="8"/>
+        <text class="actorLabel" x="690" y="34" text-anchor="middle">Workers AI</text>
+        <text class="actorSub"   x="690" y="60" text-anchor="middle">env.AI</text>
+
+        <rect class="actorBox" x="823" y="14" width="124" height="30" rx="8"/>
+        <text class="actorLabel" x="885" y="34" text-anchor="middle">D1</text>
+        <text class="actorSub"   x="885" y="60" text-anchor="middle">SQLite</text>
+      </g>
+
+      <!-- Lifelines -->
+      <g>
+        <line class="lifeline" x1="90"  y1="70" x2="90"  y2="812"/>
+        <line class="lifeline" x1="285" y1="70" x2="285" y2="812"/>
+        <line class="lifeline" x1="480" y1="70" x2="480" y2="812"/>
+        <line class="lifeline" x1="690" y1="70" x2="690" y2="812"/>
+        <line class="lifeline" x1="885" y1="70" x2="885" y2="812"/>
+      </g>
+
+      <!-- Phase A band -->
+      <rect class="band" x="20" y="82" width="920" height="20" rx="6"/>
+      <text class="bandText" x="30" y="96">① PARSE &amp; CONFIRM</text>
+
+      <!-- m1 -->
+      <line class="call" x1="90" y1="124" x2="285" y2="124" marker-end="url(#ah)"/>
+      <text class="lbl" x="187" y="118" text-anchor="middle">«chia 540k cho Aya, Ben»</text>
+      <!-- m2 -->
+      <line class="call" x1="285" y1="158" x2="480" y2="158" marker-end="url(#ah)"/>
+      <text class="lbl" x="382" y="152" text-anchor="middle">POST /webhook (message)</text>
+      <!-- m3 return -->
+      <line class="ret" x1="480" y1="192" x2="285" y2="192" marker-end="url(#ahm)"/>
+      <text class="lbl" x="382" y="186" text-anchor="middle">200 OK — ack ngay</text>
+      <!-- ctx.waitUntil note on Worker lifeline -->
+      <rect class="noteBox" x="408" y="206" width="144" height="24" rx="6"/>
+      <text class="noteText" x="480" y="222" text-anchor="middle">ctx.waitUntil( async … )</text>
+      <!-- m4 -->
+      <line class="call" x1="480" y1="252" x2="885" y2="252" marker-end="url(#ah)"/>
+      <text class="lbl" x="682" y="246" text-anchor="middle">tìm event theo chat_id + load participants</text>
+      <!-- m5 return -->
+      <line class="ret" x1="885" y1="286" x2="480" y2="286" marker-end="url(#ahm)"/>
+      <text class="lbl" x="682" y="280" text-anchor="middle">event + thành viên</text>
+      <!-- m6 -->
+      <line class="call" x1="480" y1="320" x2="690" y2="320" marker-end="url(#ah)"/>
+      <text class="lbl" x="585" y="314" text-anchor="middle">env.AI.run(text + split_expense)</text>
+      <!-- m7 return -->
+      <line class="ret" x1="690" y1="354" x2="480" y2="354" marker-end="url(#ahm)"/>
+      <text class="lbl" x="585" y="348" text-anchor="middle">tool_call: split_expense(amount, members[])</text>
+      <!-- m8 -->
+      <line class="call" x1="480" y1="388" x2="885" y2="388" marker-end="url(#ah)"/>
+      <text class="lbl" x="682" y="382" text-anchor="middle">INSERT pending_actions(id, args)</text>
+      <!-- m9 -->
+      <line class="call" x1="480" y1="422" x2="285" y2="422" marker-end="url(#ah)"/>
+      <text class="lbl" x="382" y="416" text-anchor="middle">sendMessage: tóm tắt + [✅ Có] [❌ Không]</text>
+      <!-- m10 -->
+      <line class="call" x1="285" y1="456" x2="90" y2="456" marker-end="url(#ah)"/>
+      <text class="lbl" x="187" y="450" text-anchor="middle">hiện thẻ xác nhận</text>
+
+      <!-- Phase B band -->
+      <rect class="band" x="20" y="474" width="920" height="20" rx="6"/>
+      <text class="bandText" x="30" y="488">② EXECUTE — sau khi chạm ✅</text>
+
+      <!-- m11 -->
+      <line class="call" x1="90" y1="516" x2="285" y2="516" marker-end="url(#ah)"/>
+      <text class="lbl" x="187" y="510" text-anchor="middle">chạm ✅ Có</text>
+      <!-- m12 -->
+      <line class="call" x1="285" y1="550" x2="480" y2="550" marker-end="url(#ah)"/>
+      <text class="lbl" x="382" y="544" text-anchor="middle">POST /webhook (callback_query)</text>
+      <!-- m13 return -->
+      <line class="ret" x1="480" y1="584" x2="285" y2="584" marker-end="url(#ahm)"/>
+      <text class="lbl" x="382" y="578" text-anchor="middle">200 OK</text>
+      <!-- m14 -->
+      <line class="call" x1="480" y1="618" x2="885" y2="618" marker-end="url(#ah)"/>
+      <text class="lbl" x="682" y="612" text-anchor="middle">đọc pending_actions[id] · kiểm tra creator</text>
+      <!-- m15 return -->
+      <line class="ret" x1="885" y1="652" x2="480" y2="652" marker-end="url(#ahm)"/>
+      <text class="lbl" x="682" y="646" text-anchor="middle">args đã lưu</text>
+      <!-- m16 -->
+      <line class="call" x1="480" y1="686" x2="885" y2="686" marker-end="url(#ah)"/>
+      <text class="lbl" x="682" y="680" text-anchor="middle">writeExpense() + splits → settle.ts</text>
+      <!-- m17 return -->
+      <line class="ret" x1="885" y1="720" x2="480" y2="720" marker-end="url(#ahm)"/>
+      <text class="lbl" x="682" y="714" text-anchor="middle">ok</text>
+      <!-- m18 -->
+      <line class="call" x1="480" y1="754" x2="285" y2="754" marker-end="url(#ah)"/>
+      <text class="lbl" x="382" y="748" text-anchor="middle">editMessageText: ✅ Đã lưu + quyết toán</text>
+      <!-- m19 -->
+      <line class="call" x1="285" y1="788" x2="90" y2="788" marker-end="url(#ah)"/>
+      <text class="lbl" x="187" y="782" text-anchor="middle">hiện kết quả ai nợ ai</text>
+    </svg>
+  </div>
+  <div class="legend">
+    <span><i class="swatch" style="border-top-color:var(--accent)"></i> call / request</span>
+    <span><i class="swatch" style="border-top-color:var(--muted); border-top-style:dashed"></i> return / response</span>
+    <span><i class="swatch" style="border-top:0; width:14px; height:12px; background:var(--good-soft); border:1px solid var(--good); border-radius:3px"></i> background note</span>
+  </div>
+
+  <div class="callout">
+    <div class="h">💡 Why the two phases are separate updates</div>
+    <p style="margin:0">A Workers AI round-trip takes seconds, but Telegram retries the webhook if it doesn't <code>200</code> fast — so phase ① acks immediately (m3) and does the parse in <code>ctx.waitUntil</code>. That means threading <code>ctx: ExecutionContext</code> into <code>fetch</code> (it isn't passed today, <code>src/index.ts</code>). And the <strong>Yes</strong> tap arrives as a <em>separate</em> <code>callback_query</code> update (m12) — which is exactly why the parsed action is stashed in a <code>pending_actions</code> D1 row (m8) and referenced by a short id in the button's <code>callback_data</code> (64-byte limit).</p>
+  </div>
+
+  <h2>4 · Model comparison (Workers AI, free tier)</h2>
+  <p><strong>10,000 Neurons/day free</strong> on both Free and Paid plans (resets 00:00 UTC). One <code>split_expense</code> parse ≈ 1,000–1,500 input + ~150 output tokens.</p>
+  <table>
+    <thead><tr><th>Model ID</th><th>Character</th><th class="num">~Neurons / parse</th><th class="num">~Free parses / day</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>@cf/meta/llama-3.3-70b-instruct-fp8-fast</code> <span class="rec">◆ rec</span></td>
+        <td>Strongest tool-calling on Workers AI, still fast (fp8). Best parse accuracy.</td>
+        <td class="num">~65</td><td class="num">~150</td>
+      </tr>
+      <tr>
+        <td><code>@cf/meta/llama-3.1-8b-instruct</code></td>
+        <td>Cheaper / faster; fine for short "split X among A,B,C". May fumble trickier phrasings.</td>
+        <td class="num">~40</td><td class="num">~230</td>
+      </tr>
+      <tr>
+        <td><code>@hf/nousresearch/hermes-2-pro-mistral-7b</code></td>
+        <td>Purpose-built for function calling (beta), lightweight.</td>
+        <td class="num">~40</td><td class="num">~230</td>
+      </tr>
+      <tr>
+        <td><code>@cf/mistralai/mistral-small-3.1-24b-instruct</code></td>
+        <td>128k context, solid middle option.</td>
+        <td class="num">~50</td><td class="num">~190</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <div class="h">🇻🇳 Accuracy lever that matters more than model size</div>
+    <p style="margin:0">These are general-purpose models. Parse quality on Vietnamese/mixed input (e.g. <em>"chia 540k cho Aya với Ben tính đôi"</em>) depends heavily on a well-written <strong>system prompt</strong>: Vietnamese few-shot examples, explicit <code>k → ×1000</code> and <code>tr → ×1,000,000</code> đồng normalization, and a clear instruction that <code>weight</code> means shares (<em>tính đôi</em> → weight 2). The confirm step is the safety net for whatever slips through.</p>
+  </div>
+
+  <h2>5 · The one tool: <code>split_expense</code></h2>
+  <p>Few, goal-shaped. The model fills business args only; the server resolves names against the participant list and enforces identity.</p>
+  <pre><code>{
+  name: "split_expense",
+  description: "Split one shared expense among event members with optional weights.",
+  parameters: {
+    type: "object",
+    properties: {
+      title:  { type: "string",  description: "What the expense was for" },
+      amount: { type: "integer", description: "Total in whole đồng (540k → 540000)" },
+      members: {
+        type: "array",
+        description: "Participants included, by name as written",
+        items: {
+          type: "object",
+          properties: {
+            name:   { type: "string" },
+            weight: { type: "integer", description: "Shares; default 1, ×2 = 2" }
+          },
+          required: ["name"]
+        }
+      }
+    },
+    required: ["amount", "members"]
+  }
+}</code></pre>
+  <p class="muted">Server maps each <code>name</code> → a <code>participants.id</code> (fuzzy + <code>@mention</code> entities for real user IDs), builds the <code>splits[]</code> the existing <code>writeSplits()</code> expects, and the payer is always the verified Telegram sender.</p>
+
+  <h2>6 · What changes in the code</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>New</h3>
+      <ul class="tight">
+        <li class="filerow">src/nl.ts — build prompt, call <code>env.AI</code>, map tool call → args, name resolution</li>
+        <li class="filerow">pending_actions table in <code>schema.sql</code></li>
+        <li><code>[ai]</code> binding + <code>AI_MODEL</code> var in <code>wrangler.toml</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Touched</h3>
+      <ul class="tight">
+        <li class="filerow">src/telegram.ts — handle plain text, <code>/tally</code>, and <code>callback_query</code></li>
+        <li class="filerow">src/index.ts — pass <code>ctx</code> to the webhook; add <code>AI</code> / <code>AI_MODEL</code> to <code>Env</code></li>
+        <li class="filerow">src/api.ts — extract <code>writeExpense(env, userId, eventId, args)</code> as a pure op reused by both the REST route and the bot</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="h">🔁 The key refactor</div>
+    <p style="margin:0">Today the expense-creation logic is welded to HTTP inside <code>handleApi</code> (<code>src/api.ts</code>). Extract a pure <code>writeExpense(env, actingUserId, eventId, args)</code> that neither knows nor cares whether the caller was a REST request or an LLM tool call — then both the Mini App and the bot write through the exact same path and the same <code>settle.ts</code> math.</p>
+  </div>
+
+  <h2>7 · Senior review — findings &amp; open decisions</h2>
+  <p class="muted">A pass over this design as reviewed code. The architecture holds (confirm-gate, one write path, identity from Telegram); the gaps are in the <em>state-machine edges</em> — expired, duplicate, unauthorized, unbound, unclaimed — which is where money apps earn trust. Each is ~5 lines if decided now.</p>
+
+  <div class="card finding crit">
+    <h3><span class="sev crit">Critical</span>Telegram privacy mode: the "plain text" path mostly won't fire in groups</h3>
+    <p>By default, bots in groups <strong>only receive</strong> commands, @mentions, and replies to the bot — not arbitrary messages. So <em>"chia 540k cho Aya, Ben"</em> typed plainly never reaches the webhook. Invisible in local testing (we POST fake updates straight to <code>/webhook</code>), guaranteed to surface in the first real group.</p>
+    <div class="decide-box"><b>Decide:</b> (A) keep privacy mode ON — users write <code>@TallyBot chia 540k…</code>; less noise, less cost, no "bot reads everything" concern &nbsp;·&nbsp; (B) disable via BotFather — bot sees every message, must cheaply filter before parsing. <span class="muted">Lean: A.</span></div>
+    <div class="fix-box"><b>Proposed fix (option A):</b> keep privacy mode ON and gate on <em>addressed-to-bot</em>. Add a <code>BOT_USERNAME</code> var to <code>wrangler.toml</code>; in groups, only parse when the text starts with the mention or the message replies to the bot. Private chats parse as-is.
+<pre><code>const mention = "@" + env.BOT_USERNAME;
+const addressed = isPrivate
+  || text.startsWith(mention)
+  || msg.reply_to_message?.from?.username === env.BOT_USERNAME;
+if (!addressed) return ok();          // stay silent in groups
+const query = text.replace(mention, "").trim();  // strip before parsing</code></pre></div>
+  </div>
+
+  <div class="card finding crit">
+    <h3><span class="sev crit">Critical</span><code>pending_actions</code> has no lifecycle</h3>
+    <ul class="tight">
+      <li><b>TTL</b> — a Yes tap on a week-old card must reply "hết hạn, gõ lại nhé" (e.g. 15-min expiry checked at callback time).</li>
+      <li><b>Idempotency</b> — double-tap Yes → duplicate expense. Consume the row atomically: <code>UPDATE … SET status='done' WHERE id=? AND status='pending'</code>, proceed only if <code>meta.changes === 1</code>.</li>
+      <li><b>The ❌ No branch</b> — delete the row + edit the message; currently unspecified.</li>
+      <li><b>Wrong-user tap</b> — anyone in the chat can press the button; non-creator gets <code>answerCallbackQuery("không phải của bạn")</code>.</li>
+      <li><b>Every tap</b> needs a prompt <code>answerCallbackQuery</code>, or Telegram shows a ~30s spinner on the button.</li>
+    </ul>
+    <div class="fix-box"><b>Proposed fix:</b> give the row an explicit state machine — <code>pending → done | cancelled | expired</code> — and make Yes a single atomic transition.
+<pre><code>CREATE TABLE pending_actions (
+  id         TEXT PRIMARY KEY,      -- short id → callback_data "t:yes:&lt;id&gt;"
+  chat_id    INTEGER NOT NULL,
+  user_id    INTEGER NOT NULL,      -- only this user may confirm
+  event_id   TEXT NOT NULL,
+  tool       TEXT NOT NULL,         -- 'split_expense'
+  args_json  TEXT NOT NULL,         -- resolved participant IDs (see Risk)
+  status     TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL
+);</code></pre>
+<pre><code>// callback handler, in order:
+await tg("answerCallbackQuery", { callback_query_id });   // 1. kill spinner FIRST
+const row = await get(id);
+if (!row)                    return edit("Không tìm thấy yêu cầu");
+if (from.id !== row.user_id) return toast("Không phải của bạn");   // 2. authz
+if (now() - row.created_at > 15*60_000)                            // 3. TTL
+     { await setStatus(id, "expired");  return edit("⏰ Hết hạn — gõ lại nhé"); }
+if (tappedNo)
+     { await setStatus(id, "cancelled");return edit("❌ Đã huỷ"); }
+const r = await env.DB.prepare(                                     // 4. atomic consume
+  `UPDATE pending_actions SET status='done'
+    WHERE id=?1 AND status='pending'`).bind(id).run();
+if (r.meta.changes !== 1) return;   // double-tap / raced — already handled
+await executeSplit(row);            // 5. only now touch money</code></pre></div>
+  </div>
+
+  <div class="card finding crit">
+    <h3><span class="sev crit">Critical</span>Sender may have no participant row → the write 403s</h3>
+    <p><code>src/api.ts</code> requires the actor to be a claimed participant (the <code>mine</code> check) before adding an expense. A group member who never opened the Mini App fails it — the first thing a real group hits.</p>
+    <div class="decide-box"><b>Decide:</b> (A) auto-create + claim a participant from their Telegram <code>first_name</code> at confirm time — smoothest &nbsp;·&nbsp; (B) reject with "mở Tally để tham gia trước". <span class="muted">Lean: A.</span></div>
+    <div class="fix-box"><b>Proposed fix (option A):</b> an <code>ensureParticipant()</code> helper, called at <em>execute</em> time (after ✅ — confirm stays side-effect-free). Try, in order: already claimed → claim an unclaimed row with the same normalized name → create fresh.
+<pre><code>async function ensureParticipant(env, eventId, u /* TgUser */) {
+  const mine = await one(`… WHERE event_id=?1 AND user_id=?2`, eventId, u.id);
+  if (mine) return mine.id;
+  const unclaimed = await one(          // "Phú" added by hand in the Mini App
+    `… WHERE event_id=?1 AND user_id IS NULL AND norm(name)=?2`,
+    eventId, norm(u.first_name));
+  if (unclaimed) { await claim(unclaimed.id, u.id); return unclaimed.id; }
+  const id = uid();                     // brand-new member
+  await insertParticipant(id, eventId, u.first_name, u.id);
+  return id;
+}</code></pre>
+The middle branch matters: groups typically pre-add members by name in the Mini App, so the sender usually <em>exists</em> — just unclaimed. Claiming (not duplicating) keeps the settlement table clean.</div>
+  </div>
+
+  <div class="card finding crit">
+    <h3><span class="sev crit">Critical</span><code>/tally</code> binds "the newest event" — of whom?</h3>
+    <p>The user running <code>/tally</code> may have several events; silently binding their newest is a misfire waiting to happen.</p>
+    <div class="decide-box"><b>Fix:</b> <code>/tally</code> replies with the user's recent events as inline buttons → tap one to bind this chat. Reuses the same inline-keyboard plumbing the confirm step already needs.</div>
+    <div class="fix-box"><b>Proposed fix:</b> picker + <em>exactly one bound event per chat</em>, so resolution is a single unambiguous row (no "newest wins" heuristic at all).
+<ul class="tight">
+  <li><code>/tally</code> → SELECT the sender's 5 most recent events → inline keyboard, one button per event (<code>callback_data "t:bind:&lt;eventId&gt;"</code>). No events → reply guiding them to create one in the Mini App first.</li>
+  <li>On tap, bind atomically — unbind everything else in this chat, then bind the chosen one:</li>
+</ul>
+<pre><code>await env.DB.batch([
+  stmt(`UPDATE events SET chat_id=NULL WHERE chat_id=?1`, chatId),
+  stmt(`UPDATE events SET chat_id=?1  WHERE id=?2`, chatId, eventId),
+]);
+// resolution everywhere else becomes:
+// SELECT * FROM events WHERE chat_id=?1   → 0 or 1 row, never a guess</code></pre>
+Re-running <code>/tally</code> later is the "switch active event" gesture — no extra command needed.</div>
+  </div>
+
+  <div class="card finding crit">
+    <h3><span class="sev crit">Critical</span>Fail closed on <code>WEBHOOK_SECRET</code></h3>
+    <p><code>src/telegram.ts:15</code> skips verification when the secret is <em>unset</em>. Tolerable when the webhook only sent help text; once <code>callback_query</code> executes money writes, an unset secret means anyone who finds the URL can forge updates. Make the check unconditional in this feature.</p>
+    <div class="fix-box"><b>Proposed fix:</b> a one-line flip from fail-open to fail-closed — missing secret now rejects instead of skipping the check.
+<pre><code>- if (env.WEBHOOK_SECRET && req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET)
++ if (!env.WEBHOOK_SECRET || req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET)
+    return new Response("forbidden", { status: 403 });</code></pre>
+Plus a README note: <code>WEBHOOK_SECRET</code> is now <em>required</em> — a deploy without it makes the bot refuse all updates loudly, instead of accepting forged ones silently.</div>
+  </div>
+
+  <div class="card finding risk">
+    <h3><span class="sev risk">Risk</span>Decide explicitly, don't improvise later</h3>
+    <ul class="tight">
+      <li><b>Tool args are untrusted input.</b> Validate between model output and <code>pending_actions</code>: <code>amount</code> integer &gt; 0 with a sane upper bound; <code>members</code> non-empty; weights integers 1..~20; coerce strings (the model <em>will</em> emit <code>"540k"</code> occasionally).</li>
+      <li><b>Name resolution needs rules, not vibes.</b> Normalize diacritics ("Phu" = "Phú") → exact match → unique-prefix match → otherwise <em>refuse and ask</em>, never guess. Unknown name = "⚠️ không tìm thấy 'X'" in the confirm card, never silently dropped.</li>
+      <li><b>Store resolved participant IDs</b> in <code>pending_actions</code>, not names — and re-validate they still exist at execute time (members can change between confirm and Yes).</li>
+      <li><b>Workers AI failure path.</b> Occasional 503s/timeouts: one retry, then a graceful "thử lại sau". Optional: put Cloudflare AI Gateway in front of the binding for retries + analytics.</li>
+    </ul>
+    <div class="fix-box"><b>Proposed fixes:</b> all four live in <code>src/nl.ts</code> as small pure functions (unit-testable, no I/O).
+<ul class="tight">
+  <li><b>Arg validation</b> — accept integers or the Vietnamese shorthand the model may echo; anything else is a parse failure, never a guess:</li>
+</ul>
+<pre><code>function parseAmount(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.round(v);
+  const m = String(v).trim().toLowerCase()
+    .match(/^(\d+(?:[.,]\d+)?)\s*(k|tr|m|củ|cu)?$/);   // 540k · 1.5tr · 2m
+  if (!m) return null;
+  const mult = { k: 1e3, tr: 1e6, m: 1e6, "củ": 1e6, cu: 1e6 }[m[2]] ?? 1;
+  const n = Math.round(parseFloat(m[1].replace(",", ".")) * mult);
+  return n > 0 && n <= 10_000_000_000 ? n : null;      // 0 &lt; amount ≤ 10 tỷ
+}
+// members: 1..50, dedup by resolved id
+// weight:  Math.min(20, Math.max(1, Math.round(Number(w) || 1)))</code></pre>
+<ul class="tight">
+  <li><b>Name resolution ladder</b> — normalize → exact → unique prefix → refuse:</li>
+</ul>
+<pre><code>const norm = (s: string) => s.normalize("NFD")
+  .replace(/\p{M}/gu, "").replaceAll("đ", "d").replaceAll("Đ", "d")
+  .toLowerCase().trim();                       // "Phú" → "phu"
+
+function resolveName(input: string, ps: {id:string; name:string}[]) {
+  const q = norm(input);
+  const exact  = ps.filter(p => norm(p.name) === q);
+  if (exact.length === 1)  return { id: exact[0].id };
+  const prefix = ps.filter(p => norm(p.name).startsWith(q));
+  if (prefix.length === 1) return { id: prefix[0].id };
+  return { error: exact.length + prefix.length === 0 ? "unknown" : "ambiguous" };
+}
+// ANY unresolved name → no pending row; bot replies
+// "⚠️ Không tìm thấy 'X' — thành viên gồm: Aya, Ben, Chi…"</code></pre>
+<ul class="tight">
+  <li><b>IDs in the payload</b> — <code>args_json</code> stores <code>{participantId, weight}[]</code>; at execute time, <code>SELECT</code> those ids for the event and expire the card if any vanished.</li>
+  <li><b>AI resilience</b> — wrap <code>env.AI.run</code>: 10s timeout, one retry, then reply "Bot đang bận, thử lại sau nhé 🙏". AI Gateway (<code>[ai] gateway</code> in wrangler.toml) adds retries/analytics with zero code if wanted.</li>
+</ul></div>
+  </div>
+
+  <div class="card finding">
+    <h3><span class="sev debt">Debt</span>Inherited from the existing code — cheap to pay down now</h3>
+    <ul class="tight">
+      <li><code>settle.ts</code>'s "informal checks" still aren't tests. This feature adds two more pure, bug-prone functions (name resolution, arg validation) — the moment to add one real test file for all three.</li>
+      <li><code>writeSplits</code> does N sequential inserts; D1 has <code>batch()</code>. Pre-existing nit, cheap to fix while extracting <code>writeExpense()</code>.</li>
+      <li>The "~Neurons / parse" figures in §4 are extrapolations — verify against the Cloudflare dashboard after the first real day.</li>
+    </ul>
+    <div class="fix-box"><b>Proposed fixes:</b>
+<ul class="tight">
+  <li><b>Tests</b> — <code>npm i -D vitest</code> (repo has none today). One file per pure module: <code>test/settle.test.ts</code> (shares always sum <em>exactly</em> to the total across random weights/locked amounts; net balances sum to 0), <code>test/nl.test.ts</code> (<code>parseAmount</code> table: <code>"540k"→540000</code>, <code>"1,5tr"→1500000</code>, junk→null; <code>resolveName</code> diacritics/prefix/ambiguous cases). No Worker runtime needed — they're plain functions.</li>
+  <li><b>Batch the split inserts</b> — in the extracted <code>writeExpense()</code>: <code>env.DB.batch(splits.map(s =&gt; stmt.bind(…)))</code> instead of N sequential <code>run()</code>s; same for delete+rewrite on edit.</li>
+  <li><b>Neuron reality-check</b> — after day one, compare dashboard spend to §4; if 8B parses fine in practice, drop <code>AI_MODEL</code> down and pocket the headroom.</li>
+</ul></div>
+  </div>
+
+  <h2>8 · How to verify</h2>
+  <ul class="tight">
+    <li>Local: <code>wrangler dev</code>, POST a fake <code>message</code> update to <code>/webhook</code> with sample Vietnamese text; assert a Yes/No keyboard comes back and <em>nothing</em> is written yet.</li>
+    <li>POST the matching <code>callback_query</code>; assert the expense row + splits appear and the settlement recomputes.</li>
+    <li>Negative paths: no event bound (→ /tally prompt), gibberish (→ "chưa hiểu"), unknown name (→ surfaced in confirm).</li>
+    <li>Watch the Neuron spend in the Cloudflare dashboard against the 10k/day free budget.</li>
+  </ul>
+
+  <footer>
+    Brainstorm doc · Tally NL bot layer · lives in <code>/brainstorm/</code>. All future visualization HTML goes here too.
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('themeToggle');
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light'
+        : cur === 'light' ? 'dark'
+        : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', next);
+    });
+  })();
+</script>
+</body>
+</html>

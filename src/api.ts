@@ -1,6 +1,7 @@
 import type { Env } from "./index";
 import { verifyInitData, type TgUser } from "./initData";
 import { netBalances, settle, type SettleExpense } from "./settle";
+import { norm } from "./nl";
 
 const uid = () => crypto.randomUUID();
 const now = () => Date.now();
@@ -9,7 +10,7 @@ const now = () => Date.now();
 const toDong = (n: number) => Math.round(Number(n));
 
 // Vietnamese number format: '.' groups thousands. Amounts are whole đồng, so no decimals.
-function fmtVN(n: number): string {
+export function fmtVN(n: number): string {
   return Math.round(Math.abs(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
@@ -251,14 +252,10 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       if (err) return json({ error: err }, 400);
       const pf = payFields(body);
       if (typeof pf === "string") return json({ error: pf }, 400);
-      const exId = uid();
-      await env.DB.prepare(
-        `INSERT INTO expenses (id, event_id, title, amount_dong, paid_by, created_by, created_at, pay_bank, pay_account, pay_qr)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`,
-      ).bind(exId, eventId, String(body.title).trim(), toDong(body.amount), mine.id, me.id, now(),
-             pf.bank, pf.account, pf.qr).run();
-      await writeSplits(env, exId, body.splits);
-      return json(await loadEvent(env, eventId), 201);
+      const ev = await writeExpense(env, { participantId: mine.id, userId: me.id }, eventId, {
+        title: String(body.title), amount: body.amount, splits: body.splits, pay: pf,
+      });
+      return json(ev, 201);
     }
 
     // PUT /api/expenses/:id  — edit (owner only)
@@ -288,6 +285,67 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       await env.DB.prepare(`DELETE FROM splits WHERE expense_id = ?1`).bind(parts[1]).run();
       await env.DB.prepare(`DELETE FROM expenses WHERE id = ?1`).bind(parts[1]).run();
       return json(await loadEvent(env, ex.event_id));
+    }
+
+    // ---- receipt drafts: the bill-photo flow (see src/receipt.ts) ----
+    // A draft is a pending_actions row (tool='receipt_items') created by the bot
+    // when it parses a photo. The model output is only a pre-fill: what gets
+    // written below is the USER-EDITED item list from the review screen.
+
+    // GET /api/drafts/:id — draft + full event, for the Mini App review screen.
+    if (parts[0] === "drafts" && parts.length === 2 && method === "GET") {
+      const r = await loadReceiptDraft(env, parts[1], me.id);
+      if ("error" in r) return json({ error: r.error }, r.status);
+      const event = await loadEvent(env, r.row.event_id);
+      if (!event) return json({ error: "not found" }, 404);
+      return json({ draft: { id: r.row.id, ...JSON.parse(r.row.args_json) }, event });
+    }
+
+    // POST /api/drafts/:id/confirm  { items:[{title, amountDong, splits:[...]}] }
+    // Writes one expense per item. Uploader = confirmer = payer (creator-is-payer).
+    if (parts[0] === "drafts" && parts[2] === "confirm" && method === "POST") {
+      const r = await loadReceiptDraft(env, parts[1], me.id);
+      if ("error" in r) return json({ error: r.error }, r.status);
+      const row = r.row;
+      const body = await req.json<any>();
+      const validIds = new Set((await listParticipants(env, row.event_id)).map((p) => p.id));
+      const err = validateDraftItems(body, validIds);
+      if (err) return json({ error: err }, 400);
+
+      // Consume the draft atomically so a double-tap can't double-write.
+      const consume = await env.DB.prepare(
+        `UPDATE pending_actions SET status='done' WHERE id = ?1 AND status='pending'`,
+      ).bind(row.id).run();
+      if (consume.meta.changes !== 1) return json({ error: "Hoá đơn này đã được lưu rồi" }, 409);
+
+      try {
+        const payerId = await ensureParticipant(env, row.event_id, { id: me.id, first_name: me.first_name });
+        // One D1 batch = one transaction: every item lands, or none do.
+        const stmts: D1PreparedStatement[] = [];
+        for (const it of body.items) {
+          const exId = uid();
+          stmts.push(env.DB.prepare(
+            `INSERT INTO expenses (id, event_id, title, amount_dong, paid_by, created_by, created_at, pay_bank, pay_account, pay_qr)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,NULL,NULL,NULL)`,
+          ).bind(exId, row.event_id, String(it.title).trim().slice(0, 80), toDong(it.amountDong),
+                 payerId, me.id, now()));
+          for (const s of it.splits) {
+            const amount = (s.amount != null && isFinite(Number(s.amount)) && Number(s.amount) >= 0)
+              ? Math.round(Number(s.amount)) : null;
+            stmts.push(env.DB.prepare(
+              `INSERT INTO splits (expense_id, participant_id, included, weight, amount_dong) VALUES (?1,?2,?3,?4,?5)`,
+            ).bind(exId, String(s.participantId), s.included ? 1 : 0, clampWeight(s.weight), amount));
+          }
+        }
+        await env.DB.batch(stmts);
+      } catch (e) {
+        // The batch is transactional — nothing was written. Reopen the draft for a retry.
+        await env.DB.prepare(
+          `UPDATE pending_actions SET status='pending' WHERE id = ?1 AND status='done'`,
+        ).bind(row.id).run();
+        throw e;
+      }
+      return json({ saved: body.items.length, event: await loadEvent(env, row.event_id) }, 201);
     }
 
     return json({ error: "not found" }, 404);
@@ -343,18 +401,176 @@ function validateExpense(body: any): string | null {
   return null;
 }
 
+// ---- receipt-draft helpers (bill-photo flow) ----
+
+const RECEIPT_TTL_MS = 60 * 60 * 1000; // review window for a scanned bill (longer than chat cards)
+const MAX_DRAFT_ITEMS = 40;
+const MAX_ITEM_DONG = 10_000_000_000; // 10 tỷ — same runaway guard as the parsers
+
+// Load + authorize a receipt draft: exists, owned by the caller, still pending, not expired.
+async function loadReceiptDraft(
+  env: Env, id: string, userId: number,
+): Promise<{ row: any } | { error: string; status: number }> {
+  const row = await env.DB.prepare(
+    `SELECT * FROM pending_actions WHERE id = ?1 AND tool = 'receipt_items'`,
+  ).bind(id).first<any>();
+  if (!row) return { error: "not found", status: 404 };
+  if (row.user_id !== userId) return { error: "Hoá đơn này không phải của bạn", status: 403 };
+  if (row.status !== "pending") return { error: "Hoá đơn đã được lưu hoặc huỷ", status: 410 };
+  if (Date.now() - row.created_at > RECEIPT_TTL_MS) {
+    await env.DB.prepare(
+      `UPDATE pending_actions SET status='expired' WHERE id = ?1 AND status='pending'`,
+    ).bind(id).run();
+    return { error: "Hoá đơn đã hết hạn — gửi lại ảnh nhé", status: 410 };
+  }
+  return { row };
+}
+
+// Validate the user-edited items from the review screen (the authoritative data —
+// the model's parse is only a pre-fill). Mirrors validateExpense per item.
+function validateDraftItems(body: any, validParticipantIds: Set<string>): string | null {
+  const items = body?.items;
+  if (!Array.isArray(items) || items.length === 0) return "Chưa có món nào để lưu";
+  if (items.length > MAX_DRAFT_ITEMS) return `Quá nhiều món (tối đa ${MAX_DRAFT_ITEMS})`;
+  for (const it of items) {
+    const title = String(it?.title || "").trim();
+    if (!title) return "Mỗi món cần có tên";
+    if (title.length > 80) return "Tên món quá dài (tối đa 80)";
+    const amount = Number(it?.amountDong);
+    if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_ITEM_DONG) {
+      return `Số tiền không hợp lệ: ${title.slice(0, 30)}`;
+    }
+    const splits = Array.isArray(it?.splits) ? it.splits : [];
+    const incl = splits.filter((s: any) =>
+      s?.included && (Number(s.weight) > 0 || (s.amount != null && Number(s.amount) >= 0)));
+    if (incl.length === 0) return `Chưa chọn người chia cho: ${title.slice(0, 30)}`;
+    for (const s of splits) {
+      if (!validParticipantIds.has(String(s?.participantId))) {
+        return "Thành viên đã thay đổi — mở lại hoá đơn nhé";
+      }
+    }
+  }
+  return null;
+}
+
+// Weights are REAL in half-share steps: 0.5 (came late) … 20, default 1.
+function clampWeight(w: unknown): number {
+  const half = Math.round((Number(w) || 1) * 2) / 2;
+  return Math.min(20, Math.max(0.5, half));
+}
+
 async function writeSplits(env: Env, expenseId: string, splits: any[]) {
-  for (const s of splits || []) {
+  const rows = (splits || []).map((s) => {
     const amount = (s.amount != null && isFinite(Number(s.amount)) && Number(s.amount) >= 0)
       ? Math.round(Number(s.amount)) : null;
-    await env.DB.prepare(
+    return env.DB.prepare(
       `INSERT INTO splits (expense_id, participant_id, included, weight, amount_dong) VALUES (?1,?2,?3,?4,?5)`,
     ).bind(
       expenseId,
       String(s.participantId),
       s.included ? 1 : 0,
-      Math.max(1, Number(s.weight) || 1),
+      clampWeight(s.weight),
       amount,
-    ).run();
+    );
+  });
+  if (rows.length) await env.DB.batch(rows);
+}
+
+// ===========================================================================
+//  Shared write path + bot helpers
+//
+//  These are called by BOTH the REST API (Mini App) and the Telegram bot's
+//  natural-language layer (src/telegram.ts). `writeExpense` is deliberately
+//  agnostic about how the acting user was authenticated: the caller resolves
+//  the payer participant (REST enforces "must have joined"; the bot auto-joins
+//  via `ensureParticipant`) and the creator user id. Identity is never derived
+//  from an LLM — see CLAUDE.md.
+// ===========================================================================
+
+// Insert one expense + its splits, then return the reloaded event (or null).
+export async function writeExpense(
+  env: Env,
+  payer: { participantId: string; userId: number },
+  eventId: string,
+  input: { title: string; amount: number; splits: any[]; pay?: { bank: string | null; account: string | null; qr: string | null } },
+) {
+  const exId = uid();
+  const pay = input.pay ?? { bank: null, account: null, qr: null };
+  await env.DB.prepare(
+    `INSERT INTO expenses (id, event_id, title, amount_dong, paid_by, created_by, created_at, pay_bank, pay_account, pay_qr)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`,
+  ).bind(exId, eventId, String(input.title).trim().slice(0, 80), toDong(input.amount),
+         payer.participantId, payer.userId, now(), pay.bank, pay.account, pay.qr).run();
+  await writeSplits(env, exId, input.splits);
+  return loadEvent(env, eventId);
+}
+
+// The single event bound to a chat (0 or 1). The /tally bind keeps exactly one
+// event per chat, so this is unambiguous — no "newest wins" guess.
+export async function resolveEventForChat(env: Env, chatId: number): Promise<any | null> {
+  return env.DB.prepare(
+    `SELECT * FROM events WHERE chat_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+  ).bind(chatId).first<any>();
+}
+
+export async function listParticipants(env: Env, eventId: string): Promise<{ id: string; name: string; user_id: number | null }[]> {
+  return (await env.DB.prepare(
+    `SELECT id, name, user_id FROM participants WHERE event_id = ?1 ORDER BY rowid`,
+  ).bind(eventId).all<any>()).results;
+}
+
+// Events the user created or has claimed a participant in, most recent first.
+export async function recentEventsForUser(env: Env, userId: number, limit = 5): Promise<{ id: string; title: string }[]> {
+  return (await env.DB.prepare(
+    `SELECT DISTINCT e.id, e.title, e.created_at
+       FROM events e
+       LEFT JOIN participants p ON p.event_id = e.id
+      WHERE e.created_by = ?1 OR p.user_id = ?1
+      ORDER BY e.created_at DESC LIMIT ?2`,
+  ).bind(userId, limit).all<any>()).results.map((e: any) => ({ id: e.id, title: e.title }));
+}
+
+// Bind exactly one event to a chat: unbind whatever was bound, then bind this one.
+export async function bindEventToChat(env: Env, chatId: number, eventId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE events SET chat_id = NULL WHERE chat_id = ?1`).bind(chatId),
+    env.DB.prepare(`UPDATE events SET chat_id = ?1 WHERE id = ?2`).bind(chatId, eventId),
+  ]);
+}
+
+// Ensure the acting user has a participant row in the event; return its id.
+// Order: already claimed → claim an unclaimed row with the same (normalized)
+// name → create a fresh participant. The middle branch matters because groups
+// typically pre-add members by name in the Mini App.
+export async function ensureParticipant(env: Env, eventId: string, user: { id: number; first_name?: string }): Promise<string> {
+  const mine = await env.DB.prepare(
+    `SELECT id FROM participants WHERE event_id = ?1 AND user_id = ?2 LIMIT 1`,
+  ).bind(eventId, user.id).first<any>();
+  if (mine) return mine.id;
+
+  const wanted = norm(user.first_name || "");
+  if (wanted) {
+    const rows = (await env.DB.prepare(
+      `SELECT id, name FROM participants WHERE event_id = ?1 AND user_id IS NULL`,
+    ).bind(eventId).all<any>()).results;
+    const match = rows.find((r: any) => norm(r.name) === wanted);
+    if (match) {
+      await env.DB.prepare(`UPDATE participants SET user_id = ?1 WHERE id = ?2`).bind(user.id, match.id).run();
+      await upsertUser(env, { id: user.id, first_name: user.first_name });
+      return match.id;
+    }
   }
+
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,?4)`,
+  ).bind(id, eventId, (user.first_name || `User ${user.id}`).slice(0, 40), user.id).run();
+  await upsertUser(env, { id: user.id, first_name: user.first_name });
+  return id;
+}
+
+// Shareable settlement text for an event (same formatting as GET /summary).
+export async function eventSummaryText(env: Env, eventId: string): Promise<string | null> {
+  const ev = await loadEvent(env, eventId);
+  return ev ? summaryText(ev) : null;
 }
