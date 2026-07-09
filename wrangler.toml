@@ -10,14 +10,30 @@ binding = "ASSETS"
 # Public URL of this Worker. After your first deploy, set this to the real
 # workers.dev URL (or your custom domain) and deploy again.
 [vars]
-WEBAPP_URL = "https://tally-expense-bot.YOUR-SUBDOMAIN.workers.dev"
+WEBAPP_URL = "https://tally-expense-bot.theefoo.workers.dev"
+# Bot username WITHOUT the leading @ — used to detect messages addressed to the bot
+# in group chats (privacy mode stays ON, so plain group messages are ignored).
+BOT_USERNAME = "tp_tally_bot"
+# Workers AI model used to parse natural-language commands. Swap freely — it is a
+# one-line change with no code impact. See docs for function-calling-capable models.
+AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# Vision model that reads bill photos into line items. Swap freely — the parse is
+# behind one seam (src/receipt.ts) and the user confirms everything before any
+# write. If free-tier accuracy disappoints on real receipts, the paid escape hatch
+# is Claude via Cloudflare AI Gateway (see brainstorm/bill-ocr-model-picking.html).
+AI_VISION_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
 # DEV_MODE = "true"   # local testing only — set it in .dev.vars, never here (enables X-Dev-User bypass)
+
+# Cloudflare Workers AI binding. No external key — billed via your Cloudflare account
+# (10,000 Neurons/day free). The Worker calls it as env.AI.run(env.AI_MODEL, {...}).
+[ai]
+binding = "AI"
 
 # D1 database binding. Fill in database_id from `wrangler d1 create tally`.
 [[d1_databases]]
 binding = "DB"
 database_name = "tally"
-database_id = "PASTE-DATABASE-ID-HERE"
+database_id = "2c6675d4-c9b0-44ad-8dae-f6e0435836df"
 
 # BOT_TOKEN and WEBHOOK_SECRET are secrets, not vars — set them with:
 #   npx wrangler secret put BOT_TOKEN
