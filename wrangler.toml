@@ -35,6 +35,14 @@ binding = "DB"
 database_name = "tally"
 database_id = "2c6675d4-c9b0-44ad-8dae-f6e0435836df"
 
+# Workers Logs — persist console.* output + invocation logs, viewable in the
+# dashboard (Workers & Pages → tally-expense-bot → Observability → Logs) and
+# queryable there. Takes effect on the next `wrangler deploy`. head_sampling_rate
+# = 1 keeps 100% of invocations (fine at this traffic; lower it if volume grows).
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 # BOT_TOKEN and WEBHOOK_SECRET are secrets, not vars — set them with:
 #   npx wrangler secret put BOT_TOKEN
 #   npx wrangler secret put WEBHOOK_SECRET

@@ -21,6 +21,15 @@ export async function tg(env: Env, method: string, payload: unknown): Promise<Re
   });
 }
 
+// Structured breadcrumb for Workers Logs. One JSON object per line so the dashboard
+// indexes each field — filter by `evt` (pipeline stage), `chat` (a conversation), or
+// `pa` (a pending-action id, which stitches a split from parse → confirm → write).
+// Kept in this orchestration layer so nl.ts/receipt.ts stay pure. Never logs the bot
+// token or secrets; user text is truncated by callers.
+function log(evt: string, fields: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({ evt, ...fields }));
+}
+
 // Handles POST /webhook — the updates Telegram pushes to us. Acks fast (Telegram
 // retries otherwise) and does the slow work (LLM parse, DB writes) in the background.
 export async function handleWebhook(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -28,6 +37,7 @@ export async function handleWebhook(req: Request, env: Env, ctx: ExecutionContex
   // missing/incorrect secret must be rejected, not waved through.
   if (!env.WEBHOOK_SECRET ||
       req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
+    log("wh.reject");
     return new Response("forbidden", { status: 403 });
   }
 
@@ -39,6 +49,11 @@ export async function handleWebhook(req: Request, env: Env, ctx: ExecutionContex
 }
 
 async function processUpdate(update: any, env: Env): Promise<void> {
+  log("wh.recv", {
+    kind: update.callback_query ? "callback" : Array.isArray(update.message?.photo) ? "photo" : "text",
+    chat: update.callback_query?.message?.chat?.id ?? update.message?.chat?.id,
+    from: (update.callback_query?.from ?? update.message?.from)?.id,
+  });
   if (update.callback_query) return handleCallback(update.callback_query, env);
 
   const msg = update.message;
@@ -58,6 +73,7 @@ async function processUpdate(update: any, env: Env): Promise<void> {
   if (typeof msg.text !== "string") return;
   const text: string = msg.text.trim();
 
+  if (text.startsWith("/")) log("cmd", { chat: chatId, name: text.split(/\s+/)[0] });
   if (text.startsWith("/start") || text.startsWith("/split")) return sendStart(env, chatId, isPrivate);
   if (text.startsWith("/help")) return sendHelp(env, chatId);
   if (text.startsWith("/tally")) return handleTally(env, chatId, from);
@@ -130,8 +146,10 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
 
 // ---- natural-language split ----
 async function handleNl(env: Env, chatId: number, from: any, query: string): Promise<void> {
+  log("nl.start", { chat: chatId, user: from.id, q: query.slice(0, 80) });
   const event = await resolveEventForChat(env, chatId);
   if (!event) {
+    log("nl.noevent", { chat: chatId });
     await tg(env, "sendMessage", { chat_id: chatId, text: "Nhóm chưa chọn sự kiện. Gõ /tally để chọn nhé." });
     return;
   }
@@ -142,23 +160,28 @@ async function handleNl(env: Env, chatId: number, from: any, query: string): Pro
   let raw;
   try {
     raw = await parseWithAI(env.AI, env.AI_MODEL, query, roster.map((p) => p.name));
-  } catch {
+  } catch (e) {
+    log("err", { where: "nl.parse", chat: chatId, msg: String((e as Error)?.message ?? e) });
     await tg(env, "sendMessage", { chat_id: chatId, text: "Bot đang bận, thử lại sau nhé 🙏" });
     return;
   }
   if (!raw) {
+    log("nl.parsed", { chat: chatId, tool: false });
     await tg(env, "sendMessage", {
       chat_id: chatId,
       text: `Mình chưa hiểu 🤔. Thử: "@${env.BOT_USERNAME} chia 540k cho Aya, Ben".`,
     });
     return;
   }
+  log("nl.parsed", { chat: chatId, tool: true, amount: raw.amount, n: Array.isArray(raw.members) ? raw.members.length : 0 });
 
   const built = buildSplitArgs(raw, roster);
   if (!built.ok) {
+    log("nl.built", { chat: chatId, ok: false, err: built.error });
     await tg(env, "sendMessage", { chat_id: chatId, text: explainBuildError(built, roster) });
     return;
   }
+  log("nl.built", { chat: chatId, ok: true, amount: built.amount, n: built.members.length });
 
   // Stash the parsed action; store resolved participant IDs, not names, so a later
   // rename can't silently retarget the split. Executed only on a Yes tap.
@@ -172,6 +195,7 @@ async function handleNl(env: Env, chatId: number, from: any, query: string): Pro
     `INSERT INTO pending_actions (id, chat_id, user_id, user_name, event_id, tool, args_json, status, created_at)
      VALUES (?1,?2,?3,?4,?5,'split_expense',?6,'pending',?7)`,
   ).bind(id, chatId, from.id, from.first_name ?? null, event.id, JSON.stringify(args), Date.now()).run();
+  log("nl.pending", { chat: chatId, pa: id, amount: built.amount, n: built.members.length });
 
   await tg(env, "sendMessage", {
     chat_id: chatId,
@@ -203,6 +227,7 @@ async function handleReceiptPhoto(
     await tg(env, "sendMessage", { chat_id: chatId, text: "Nhóm chưa chọn sự kiện. Gõ /tally để chọn nhé." });
     return;
   }
+  log("rcpt.recv", { chat: chatId, user: from.id });
 
   // Placeholder first — vision parsing takes several seconds.
   const placeholder = await (await tg(env, "sendMessage", {
@@ -231,6 +256,7 @@ async function handleReceiptPhoto(
       `INSERT INTO pending_actions (id, chat_id, user_id, user_name, event_id, tool, args_json, status, created_at)
        VALUES (?1,?2,?3,?4,?5,'receipt_items',?6,'pending',?7)`,
     ).bind(id, chatId, from.id, from.first_name ?? null, event.id, JSON.stringify(draft), Date.now()).run();
+    log("rcpt.pending", { chat: chatId, pa: id, items: draft.items.length, total: draft.totalDong });
 
     // web_app buttons only work in private chats; groups get a t.me deep link
     // (requires the bot's Main Mini App to be enabled in BotFather).
@@ -281,6 +307,7 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
   if (!chatId || !messageId) { await answer(env, cq.id); return; }
 
   const [, action, id] = String(cq.data || "").split(":");
+  log("cb.recv", { chat: chatId, action, pa: id, from: cq.from?.id });
   if (action === "bind") return handleBind(env, cq, id, chatId, messageId);
   if (action === "yes" || action === "no") return handleConfirm(env, cq, action, id, chatId, messageId);
   await answer(env, cq.id);
@@ -293,6 +320,7 @@ async function handleBind(env: Env, cq: any, eventId: string, chatId: number, me
   if (!ev) { await answer(env, cq.id, "Không phải sự kiện của bạn", true); return; }
 
   await bindEventToChat(env, chatId, eventId);
+  log("bind.ok", { chat: chatId, event: eventId });
   await answer(env, cq.id, "Đã chọn ✅");
   await editText(env, chatId, messageId,
     `✅ Nhóm này giờ dùng: ${ev.title}.\nGõ "@${env.BOT_USERNAME} chia 100k cho A, B" để chia tiền.`);
@@ -301,14 +329,16 @@ async function handleBind(env: Env, cq: any, eventId: string, chatId: number, me
 async function handleConfirm(env: Env, cq: any, action: string, id: string, chatId: number, messageId: number): Promise<void> {
   const row = await env.DB.prepare(`SELECT * FROM pending_actions WHERE id = ?1`).bind(id).first<any>();
   if (!row) {
+    log("cb.confirm", { chat: chatId, pa: id, outcome: "gone" });
     await answer(env, cq.id, "Yêu cầu không còn nữa");
     await editText(env, chatId, messageId, "Yêu cầu đã hết hiệu lực.");
     return;
   }
-  if (cq.from.id !== row.user_id) { await answer(env, cq.id, "Không phải của bạn 🙅", true); return; }
-  if (row.status !== "pending") { await answer(env, cq.id); return; } // already done/cancelled
+  if (cq.from.id !== row.user_id) { log("cb.confirm", { chat: chatId, pa: id, outcome: "notyours", from: cq.from.id }); await answer(env, cq.id, "Không phải của bạn 🙅", true); return; }
+  if (row.status !== "pending") { log("cb.confirm", { chat: chatId, pa: id, outcome: "noop", status: row.status }); await answer(env, cq.id); return; } // already done/cancelled
 
   if (Date.now() - row.created_at > TTL_MS) {
+    log("cb.confirm", { chat: chatId, pa: id, outcome: "expired" });
     await setStatus(env, id, "expired");
     await answer(env, cq.id, "Hết hạn");
     await editText(env, chatId, messageId, "⏰ Hết hạn — gõ lại nhé.");
@@ -316,6 +346,7 @@ async function handleConfirm(env: Env, cq: any, action: string, id: string, chat
   }
 
   if (action === "no") {
+    log("cb.confirm", { chat: chatId, pa: id, outcome: "cancel" });
     await setStatus(env, id, "cancelled");
     await answer(env, cq.id, "Đã huỷ");
     await editText(env, chatId, messageId, "❌ Đã huỷ.");
@@ -326,18 +357,21 @@ async function handleConfirm(env: Env, cq: any, action: string, id: string, chat
   const consume = await env.DB.prepare(
     `UPDATE pending_actions SET status='done' WHERE id = ?1 AND status='pending'`,
   ).bind(id).run();
-  if (consume.meta.changes !== 1) { await answer(env, cq.id); return; }
+  if (consume.meta.changes !== 1) { log("cb.confirm", { chat: chatId, pa: id, outcome: "dup" }); await answer(env, cq.id); return; }
 
   try {
     const summary = await executeSplit(env, row);
+    log("split.wrote", { chat: chatId, pa: id, event: row.event_id, amount: JSON.parse(row.args_json).amount });
     await answer(env, cq.id, "Đã lưu ✅");
     await editText(env, chatId, messageId, summary);
   } catch (e) {
     if (e instanceof StaleError) {
+      log("cb.confirm", { chat: chatId, pa: id, outcome: "stale" });
       await setStatus(env, id, "expired");
       await answer(env, cq.id, "Danh sách đã đổi");
       await editText(env, chatId, messageId, "⚠️ Thành viên đã thay đổi — gõ lại nhé.");
     } else {
+      log("err", { where: "confirm", chat: chatId, pa: id, msg: String((e as Error)?.message ?? e) });
       console.error("executeSplit failed", e);
       // Roll back to pending so the (still-visible) buttons can retry.
       await env.DB.prepare(
