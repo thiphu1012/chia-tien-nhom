@@ -43,6 +43,52 @@ Money is stored as **integer đồng**; splits use largest-remainder distributio
 lost or invented; settlement nets everyone to zero and finds the minimum transfers. For the
 full architecture, data model, API reference, and money model, see **[`docs/OVERVIEW.md`](docs/OVERVIEW.md)**.
 
+## How to use
+
+Once the bot is running (see [Deploy](#deploy-to-production)), here's the day-to-day flow for
+splitting a trip or dinner. Everything happens inside Telegram.
+
+**1 · Open Tally and create an event.** Message the bot **/start** (or tap its **menu button ☰**
+in any chat) → **Mở Tally**. Create an event like *"Đà Lạt 3 ngày"* — this is the shared tab
+everyone's expenses go onto.
+
+**2 · Add the people.** Add each person who's along for the trip. You're added automatically
+as the creator; everyone else you add by name.
+
+**3 · Add expenses.** For each thing someone paid for (hotel, dinner, grab…), add an expense:
+enter the amount in đồng, then choose how it's split among the members —
+
+  - **Evenly** — the default; everyone included owes an equal share.
+  - **By weight** — bump someone to **×2** if they're covering a partner, or **0,5** if they
+    joined late. Shares auto-divide so they always sum to the exact total.
+  - **Fixed amount** — pin an exact đồng amount to specific people; the remainder splits
+    across the rest.
+
+  Whoever adds the expense is recorded as the payer, and only they can edit or delete it later.
+
+**4 · (Optional) Split straight from the group chat.** Bind the chat to an event once with
+**/tally**, then just type — no need to open the app:
+
+  ```
+  @YourBot chia 540k cho Aya, Ben tính đôi
+  ```
+
+  The bot parses it, shows a summary card, and waits for your **✅ Có / ❌ Không** before saving
+  anything. ("tính đôi" = count Ben as ×2.) See [Natural-language commands](#natural-language-commands-bot).
+
+**5 · (Optional) Snap the bill.** Send the bot a **photo of a receipt**; it reads the line
+items and opens a review screen where you tap who had what, then saves each item as an
+expense. See [Bill-photo scanning](#bill-photo-scanning-bot).
+
+**6 · Settle up.** Open the **Quyết toán** (settle-up) screen. Tally nets everyone out and
+shows the **fewest transfers** that make the group even — *"Ben trả Aya 270.000 ₫"*. Tap
+**Xem** on a row to reveal that person's bank/e-wallet or transfer **QR** so you can pay on
+the spot.
+
+> **Adding vs. paying:** anyone in the event can add expenses, but an expense belongs to whoever
+> created it — the payer. Identity comes from your verified Telegram account, so there's no
+> "who paid this?" ambiguity to sort out.
+
 ## Quick start (local, no Telegram)
 
 Dev mode swaps Telegram's signed `initData` for a fake user in the URL.
