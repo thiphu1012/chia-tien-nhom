@@ -211,7 +211,8 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/setMyCommands" \
   -H "Content-Type: application/json" \
   -d '{"commands":[
         {"command":"start","description":"Mở Tally"},
-        {"command":"tally","description":"Chọn sự kiện cho nhóm này"},
+        {"command":"newevent","description":"Tạo sự kiện mới cho nhóm"},
+        {"command":"tally","description":"Xem/đổi sự kiện đang dùng"},
         {"command":"help","description":"Hướng dẫn"}
       ]}'
 ```
