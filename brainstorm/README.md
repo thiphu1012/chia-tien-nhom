@@ -13,3 +13,8 @@ so it opens offline with a double-click.
 ## Contents
 - `nl-layer-telegram-bot.html` — design for the natural-language "just tell the bot"
   layer (Workers AI parser → confirm → execute → reply). See CLAUDE.md → Next steps #1.
+- `bill-ocr-model-picking.html` — researched comparison of Workers AI vision models for
+  the bill-photo flow. See CLAUDE.md → Next steps #1.
+- `telegram-chat-scenarios.md` — complete map of every chat scenario the bot handles
+  (dispatch tree, NL split, bill photo, edge cases) + coverage gaps, incl. the
+  multi-event-per-chat design sketch.
