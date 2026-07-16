@@ -10,12 +10,23 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS events (
-  id          TEXT PRIMARY KEY,           -- uuid
-  chat_id     INTEGER,                    -- Telegram chat it was created from (nullable)
-  title       TEXT NOT NULL,
-  currency    TEXT NOT NULL DEFAULT '₫',
-  created_by  INTEGER NOT NULL,           -- Telegram user id
-  created_at  INTEGER NOT NULL
+  id            TEXT PRIMARY KEY,           -- uuid
+  home_chat_id  INTEGER,                    -- Telegram chat that OWNS this event; set at creation,
+                                            -- never nulled. A chat owns many events (nullable for
+                                            -- app-created events not yet adopted into a chat).
+  title         TEXT NOT NULL,
+  currency      TEXT NOT NULL DEFAULT '₫',
+  created_by    INTEGER NOT NULL,           -- Telegram user id
+  created_at    INTEGER NOT NULL
+);
+
+-- Which of a chat's events is currently "active" (the one /tally selected). A chat
+-- owns many events via events.home_chat_id, but exactly one is live at a time. Keeping
+-- this pointer separate from ownership means switching never disturbs the roster.
+CREATE TABLE IF NOT EXISTS chat_active_event (
+  chat_id   INTEGER PRIMARY KEY,           -- Telegram chat id
+  event_id  TEXT NOT NULL,
+  FOREIGN KEY (event_id) REFERENCES events(id)
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -67,7 +78,7 @@ CREATE TABLE IF NOT EXISTS pending_actions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_creator    ON events(created_by);
-CREATE INDEX IF NOT EXISTS idx_events_chat       ON events(chat_id);
+CREATE INDEX IF NOT EXISTS idx_events_home_chat  ON events(home_chat_id);
 CREATE INDEX IF NOT EXISTS idx_participants_event ON participants(event_id);
 CREATE INDEX IF NOT EXISTS idx_participants_user  ON participants(user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_event     ON expenses(event_id);
