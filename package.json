@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:local": "wrangler d1 execute tally --local --file=./schema.sql",
-    "db:remote": "wrangler d1 execute tally --remote --file=./schema.sql"
+    "db:remote": "wrangler d1 execute tally --remote --file=./schema.sql",
+    "db:migrate:local": "wrangler d1 execute tally --local --file=./migrations/0001_multi_event_per_chat.sql",
+    "db:migrate:remote": "wrangler d1 execute tally --remote --file=./migrations/0001_multi_event_per_chat.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250601.0",

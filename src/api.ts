@@ -107,7 +107,7 @@ async function loadEvent(env: Env, eventId: string) {
     title: event.title,
     currency: event.currency,
     createdBy: event.created_by,
-    chatId: event.chat_id,
+    chatId: event.home_chat_id,
     participants,
     expenses,
     balances,
@@ -182,7 +182,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const currency = String(body.currency || "₫").slice(0, 3) || "₫";
       const id = uid();
       await env.DB.prepare(
-        `INSERT INTO events (id, chat_id, title, currency, created_by, created_at) VALUES (?1,?2,?3,?4,?5,?6)`,
+        `INSERT INTO events (id, home_chat_id, title, currency, created_by, created_at) VALUES (?1,?2,?3,?4,?5,?6)`,
       ).bind(id, body.chatId ?? null, title, currency, me.id, now()).run();
 
       // creator is auto-added and linked to their account
@@ -505,12 +505,48 @@ export async function writeExpense(
   return loadEvent(env, eventId);
 }
 
-// The single event bound to a chat (0 or 1). The /tally bind keeps exactly one
-// event per chat, so this is unambiguous — no "newest wins" guess.
+// The event currently active in a chat (0 or 1), via the chat_active_event pointer.
+// A chat owns many events (events.home_chat_id); this returns the one /tally selected.
 export async function resolveEventForChat(env: Env, chatId: number): Promise<any | null> {
   return env.DB.prepare(
-    `SELECT * FROM events WHERE chat_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT e.* FROM events e
+       JOIN chat_active_event c ON c.event_id = e.id
+      WHERE c.chat_id = ?1`,
   ).bind(chatId).first<any>();
+}
+
+// A chat's event roster for the /tally switcher: events this chat owns, plus the
+// caller's own events not yet owned by any chat (so events created in the Mini App the
+// old way remain bindable — binding "adopts" them, see bindEventToChat). `active` marks
+// the one currently selected. Newest first.
+export async function eventsForChat(
+  env: Env, chatId: number, userId: number, limit = 10,
+): Promise<{ id: string; title: string; active: boolean }[]> {
+  const rows = (await env.DB.prepare(
+    `SELECT DISTINCT e.id, e.title, e.created_at,
+            (SELECT event_id FROM chat_active_event WHERE chat_id = ?1) = e.id AS active
+       FROM events e
+       LEFT JOIN participants p ON p.event_id = e.id
+      WHERE e.home_chat_id = ?1
+         OR (e.home_chat_id IS NULL AND (e.created_by = ?2 OR p.user_id = ?2))
+      ORDER BY e.created_at DESC
+      LIMIT ?3`,
+  ).bind(chatId, userId, limit).all<any>()).results;
+  return rows.map((e) => ({ id: e.id, title: e.title, active: !!e.active }));
+}
+
+// Create a brand-new event owned by a chat and make it the active one (used by the
+// bot's /newevent). The creator becomes the first participant. Returns the event id.
+export async function createEventForChat(
+  env: Env, chatId: number, creator: { id: number; first_name?: string }, title: string,
+): Promise<string> {
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO events (id, home_chat_id, title, currency, created_by, created_at) VALUES (?1,?2,?3,'₫',?4,?5)`,
+  ).bind(id, chatId, title.trim().slice(0, 80), creator.id, now()).run();
+  await ensureParticipant(env, id, { id: creator.id, first_name: creator.first_name });
+  await bindEventToChat(env, chatId, id);
+  return id;
 }
 
 export async function listParticipants(env: Env, eventId: string): Promise<{ id: string; name: string; user_id: number | null }[]> {
@@ -530,11 +566,18 @@ export async function recentEventsForUser(env: Env, userId: number, limit = 5): 
   ).bind(userId, limit).all<any>()).results.map((e: any) => ({ id: e.id, title: e.title }));
 }
 
-// Bind exactly one event to a chat: unbind whatever was bound, then bind this one.
+// Make `eventId` the active event in `chatId`. Two effects, in one transaction:
+//   1. Adopt: if the event has no home chat yet (created in the Mini App the old way),
+//      claim it for this chat — so it now shows in this chat's /tally roster.
+//   2. Point: upsert the chat_active_event pointer to this event.
+// Switching to a different event later just moves the pointer; the roster is untouched.
 export async function bindEventToChat(env: Env, chatId: number, eventId: string): Promise<void> {
   await env.DB.batch([
-    env.DB.prepare(`UPDATE events SET chat_id = NULL WHERE chat_id = ?1`).bind(chatId),
-    env.DB.prepare(`UPDATE events SET chat_id = ?1 WHERE id = ?2`).bind(chatId, eventId),
+    env.DB.prepare(`UPDATE events SET home_chat_id = ?1 WHERE id = ?2 AND home_chat_id IS NULL`).bind(chatId, eventId),
+    env.DB.prepare(
+      `INSERT INTO chat_active_event (chat_id, event_id) VALUES (?1, ?2)
+         ON CONFLICT(chat_id) DO UPDATE SET event_id = ?2`,
+    ).bind(chatId, eventId),
   ]);
 }
 

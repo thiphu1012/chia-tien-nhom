@@ -2,7 +2,7 @@ import type { Env } from "./index";
 import { parseWithAI, buildSplitArgs, type BuildResult, type Participant } from "./nl";
 import { parseReceiptWithAI, normalizeReceipt } from "./receipt";
 import {
-  resolveEventForChat, listParticipants, recentEventsForUser, bindEventToChat,
+  resolveEventForChat, listParticipants, eventsForChat, createEventForChat, bindEventToChat,
   ensureParticipant, writeExpense, eventSummaryText, fmtVN,
 } from "./api";
 
@@ -76,6 +76,7 @@ async function processUpdate(update: any, env: Env): Promise<void> {
   if (text.startsWith("/")) log("cmd", { chat: chatId, name: text.split(/\s+/)[0] });
   if (text.startsWith("/start") || text.startsWith("/split")) return sendStart(env, chatId, isPrivate);
   if (text.startsWith("/help")) return sendHelp(env, chatId);
+  if (text.startsWith("/newevent")) return handleNewEvent(env, chatId, from, text);
   if (text.startsWith("/tally")) return handleTally(env, chatId, from);
 
   // Natural-language path. In groups, privacy mode stays ON, so we only see (and
@@ -122,25 +123,48 @@ async function sendHelp(env: Env, chatId: number): Promise<void> {
     text:
       "Tally giúp chia chi phí chung.\n" +
       "• /start — mở ứng dụng\n" +
-      "• /tally — chọn sự kiện cho nhóm này\n" +
+      "• /newevent <tên> — tạo sự kiện mới cho nhóm\n" +
+      "• /tally — xem và đổi sự kiện đang dùng (nhóm có thể có nhiều sự kiện)\n" +
       `• Nhắn "@${env.BOT_USERNAME} chia 540k cho Aya, Ben tính đôi" — bot sẽ hỏi xác nhận trước khi lưu.`,
   });
 }
 
-// ---- /tally: pick the event this chat is bound to ----
+// ---- /tally: list this chat's events and switch which one is active ----
 async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
-  const events = await recentEventsForUser(env, from.id, 5);
+  const events = await eventsForChat(env, chatId, from.id, 10);
   if (!events.length) {
     await tg(env, "sendMessage", {
       chat_id: chatId,
-      text: "Bạn chưa có sự kiện nào. Mở Tally (nút menu ☰) để tạo, rồi gõ /tally lại.",
+      text: "Nhóm chưa có sự kiện nào. Tạo bằng: /newevent Đà Lạt 3 ngày — hoặc mở Tally (nút menu ☰).",
     });
     return;
   }
   await tg(env, "sendMessage", {
     chat_id: chatId,
-    text: "Chọn sự kiện cho nhóm này (gõ /tally lần nữa để đổi):",
-    reply_markup: { inline_keyboard: events.map((e) => [{ text: e.title, callback_data: `t:bind:${e.id}` }]) },
+    text: "Chọn sự kiện đang dùng cho nhóm (✓ = hiện tại). Gõ /tally lần nữa để đổi, /newevent để thêm:",
+    reply_markup: {
+      inline_keyboard: events.map((e) => [
+        { text: (e.active ? "✓ " : "") + e.title, callback_data: `t:bind:${e.id}` },
+      ]),
+    },
+  });
+}
+
+// ---- /newevent <name>: create a new event owned by this chat, make it active ----
+async function handleNewEvent(env: Env, chatId: number, from: any, text: string): Promise<void> {
+  // Strip the command token (and any "@botname" Telegram appends in groups).
+  const title = text.replace(/^\/newevent(@\S+)?\s*/i, "").trim().slice(0, 80);
+  if (!title) {
+    await tg(env, "sendMessage", { chat_id: chatId, text: "Đặt tên sự kiện nhé: /newevent Đà Lạt 3 ngày" });
+    return;
+  }
+  const id = await createEventForChat(env, chatId, from, title);
+  log("event.new", { chat: chatId, event: id });
+  await tg(env, "sendMessage", {
+    chat_id: chatId,
+    text: `✅ Đã tạo "${title}" và chọn cho nhóm này.\n` +
+      `Thêm chi tiêu: "@${env.BOT_USERNAME} chia 200k cho A, B", gửi ảnh hoá đơn, hoặc mở Tally (☰).\n` +
+      "Gõ /tally để xem hoặc đổi giữa các sự kiện.",
   });
 }
 
@@ -314,16 +338,17 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
 }
 
 async function handleBind(env: Env, cq: any, eventId: string, chatId: number, messageId: number): Promise<void> {
-  // Authz: only bind an event the tapper actually belongs to.
-  const events = await recentEventsForUser(env, cq.from.id, 20);
+  // Authz: you can only activate an event this chat already owns, or one of your own
+  // not-yet-adopted events — exactly the set /tally offered. eventsForChat encodes it.
+  const events = await eventsForChat(env, chatId, cq.from.id, 50);
   const ev = events.find((e) => e.id === eventId);
-  if (!ev) { await answer(env, cq.id, "Không phải sự kiện của bạn", true); return; }
+  if (!ev) { await answer(env, cq.id, "Không chọn được sự kiện này", true); return; }
 
   await bindEventToChat(env, chatId, eventId);
   log("bind.ok", { chat: chatId, event: eventId });
   await answer(env, cq.id, "Đã chọn ✅");
   await editText(env, chatId, messageId,
-    `✅ Nhóm này giờ dùng: ${ev.title}.\nGõ "@${env.BOT_USERNAME} chia 100k cho A, B" để chia tiền.`);
+    `✅ Nhóm này giờ dùng: ${ev.title}.\nGõ "@${env.BOT_USERNAME} chia 100k cho A, B" để chia tiền, hoặc /tally để đổi.`);
 }
 
 async function handleConfirm(env: Env, cq: any, action: string, id: string, chatId: number, messageId: number): Promise<void> {
