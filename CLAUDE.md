@@ -66,6 +66,9 @@ an inline Yes/No confirm card via `pending_actions`), and the **bill-photo flow*
 (`src/receipt.ts` — photo in chat → Workers AI vision parse → `pending_actions` draft →
 Mini App review screen at `?draft=<id>` → confirm writes 1 expense per item in one D1
 batch). Weights are `REAL` in half-steps (0.5 = came late, 2 = covers a partner).
+Chat commands to manage a chat's events from Telegram: `/newevent`, `/tally` (switch
+active event), and `/addmember <names>` (add name-only participants to the active event;
+comma/`và`-separated, deduped, linked to a real user later via `ensureParticipant`).
 Not yet done: the optional MCP path.
 
 ## Bill-photo flow invariants (keep these too)

@@ -58,7 +58,7 @@ commands: ## Step 8b — register the slash-command list
 	echo "→ setMyCommands"; \
 	curl -sS "https://api.telegram.org/bot$$BOT_TOKEN/setMyCommands" \
 	  -H "Content-Type: application/json" \
-	  -d '{"commands":[{"command":"start","description":"Mở Tally"},{"command":"newevent","description":"Tạo sự kiện mới cho nhóm"},{"command":"tally","description":"Xem/đổi sự kiện đang dùng"},{"command":"help","description":"Hướng dẫn"}]}'; \
+	  -d '{"commands":[{"command":"start","description":"Mở Tally"},{"command":"newevent","description":"Tạo sự kiện mới cho nhóm"},{"command":"addmember","description":"Thêm thành viên vào sự kiện"},{"command":"tally","description":"Xem/đổi sự kiện đang dùng"},{"command":"help","description":"Hướng dẫn"}]}'; \
 	echo
 
 webhook-info: ## Inspect the current webhook (url, pending count, last error)

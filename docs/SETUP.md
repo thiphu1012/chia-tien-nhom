@@ -212,6 +212,7 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/setMyCommands" \
   -d '{"commands":[
         {"command":"start","description":"Mở Tally"},
         {"command":"newevent","description":"Tạo sự kiện mới cho nhóm"},
+        {"command":"addmember","description":"Thêm thành viên vào sự kiện"},
         {"command":"tally","description":"Xem/đổi sự kiện đang dùng"},
         {"command":"help","description":"Hướng dẫn"}
       ]}'
