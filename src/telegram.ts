@@ -2,8 +2,9 @@ import type { Env } from "./index";
 import { parseWithAI, buildSplitArgs, norm, type BuildResult, type Participant } from "./nl";
 import { parseReceiptWithAI, normalizeReceipt } from "./receipt";
 import {
-  resolveEventForChat, listParticipants, eventsForChat, createEventForChat, bindEventToChat,
-  ensureParticipant, addNamedParticipant, writeExpense, eventSummaryText, fmtVN,
+  resolveEventForChat, listParticipants, eventsForChat, recentEventsForUser, createEventForChat,
+  bindEventToChat, ensureParticipant, addNamedParticipant, writeExpense, eventSummaryText,
+  settlementMessageHTML, fmtVN,
 } from "./api";
 
 const TTL_MS = 15 * 60 * 1000;                       // a confirmation card expires after 15 min
@@ -78,6 +79,7 @@ async function processUpdate(update: any, env: Env): Promise<void> {
   if (text.startsWith("/help")) return sendHelp(env, chatId);
   if (text.startsWith("/newevent")) return handleNewEvent(env, chatId, from, text);
   if (text.startsWith("/addmember")) return handleAddMember(env, chatId, from, text);
+  if (text.startsWith("/quyettoan")) return handleQuyetToan(env, chatId, isPrivate, from);
   if (text.startsWith("/tally")) return handleTally(env, chatId, from);
 
   // Natural-language path. In groups, privacy mode stays ON, so we only see (and
@@ -127,6 +129,7 @@ async function sendHelp(env: Env, chatId: number): Promise<void> {
       "• /newevent <tên> — tạo sự kiện mới cho nhóm\n" +
       "• /addmember <tên> — thêm thành viên (vd: /addmember Aya, Ben)\n" +
       "• /tally — xem và đổi sự kiện đang dùng (nhóm có thể có nhiều sự kiện)\n" +
+      "• /quyettoan — xem ai trả ai + thông tin chuyển khoản (chạm để copy)\n" +
       `• Nhắn "@${env.BOT_USERNAME} chia 540k cho Aya, Ben tính đôi" — bot sẽ hỏi xác nhận trước khi lưu.`,
   });
 }
@@ -150,6 +153,37 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
       ]),
     },
   });
+}
+
+// ---- /quyettoan: pick an event, then post its settlement in copyable blocks ----
+// In a group the events come from the chat's roster; in a private chat, from the
+// user's own events. One event → show it directly; several → an inline picker.
+async function handleQuyetToan(env: Env, chatId: number, isPrivate: boolean, from: any): Promise<void> {
+  const events = isPrivate
+    ? await recentEventsForUser(env, from.id, 10)
+    : await eventsForChat(env, chatId, from.id, 10);
+  if (!events.length) {
+    await tg(env, "sendMessage", { chat_id: chatId, text: "Chưa có sự kiện nào để quyết toán. Tạo bằng /newevent nhé." });
+    return;
+  }
+  if (events.length === 1) { await sendQuyetToan(env, chatId, events[0].id); return; }
+  await tg(env, "sendMessage", {
+    chat_id: chatId,
+    text: "Chọn sự kiện để xem quyết toán:",
+    reply_markup: {
+      inline_keyboard: events.map((e: any) => [
+        { text: (e.active ? "✓ " : "") + e.title, callback_data: `t:qt:${e.id}` },
+      ]),
+    },
+  });
+}
+
+// Build + send the settlement message (parse_mode HTML → the two <pre> blocks render
+// as tap-to-copy boxes). Sent as a fresh message so the picker (if any) stays put.
+async function sendQuyetToan(env: Env, chatId: number, eventId: string): Promise<void> {
+  const html = await settlementMessageHTML(env, eventId);
+  if (!html) { await tg(env, "sendMessage", { chat_id: chatId, text: "Không tìm thấy sự kiện." }); return; }
+  await tg(env, "sendMessage", { chat_id: chatId, text: html, parse_mode: "HTML" });
 }
 
 // ---- /newevent <name>: create a new event owned by this chat, make it active ----
@@ -390,6 +424,7 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
   const [, action, id] = String(cq.data || "").split(":");
   log("cb.recv", { chat: chatId, action, pa: id, from: cq.from?.id });
   if (action === "bind") return handleBind(env, cq, id, chatId, messageId);
+  if (action === "qt") return handleQuyetToanShow(env, cq, id, chatId);
   if (action === "yes" || action === "no") return handleConfirm(env, cq, action, id, chatId, messageId);
   await answer(env, cq.id);
 }
@@ -406,6 +441,18 @@ async function handleBind(env: Env, cq: any, eventId: string, chatId: number, me
   await answer(env, cq.id, "Đã chọn ✅");
   await editText(env, chatId, messageId,
     `✅ Nhóm này giờ dùng: ${ev.title}.\nGõ "@${env.BOT_USERNAME} chia 100k cho A, B" để chia tiền, hoặc /tally để đổi.`);
+}
+
+// A tap on a /quyettoan event picker. Read-only, but still authz'd to the events the
+// tapper can see (group roster, or their own in private) — same shape as handleBind.
+async function handleQuyetToanShow(env: Env, cq: any, eventId: string, chatId: number): Promise<void> {
+  const isPrivate = cq.message?.chat?.type === "private";
+  const events = isPrivate
+    ? await recentEventsForUser(env, cq.from.id, 50)
+    : await eventsForChat(env, chatId, cq.from.id, 50);
+  if (!events.find((e: any) => e.id === eventId)) { await answer(env, cq.id, "Không xem được sự kiện này", true); return; }
+  await answer(env, cq.id);
+  await sendQuyetToan(env, chatId, eventId);
 }
 
 async function handleConfirm(env: Env, cq: any, action: string, id: string, chatId: number, messageId: number): Promise<void> {
