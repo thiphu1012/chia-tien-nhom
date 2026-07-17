@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS participants (
   event_id    TEXT NOT NULL,
   name        TEXT NOT NULL,
   user_id     INTEGER,                    -- linked Telegram user, once claimed (nullable)
+  pay_bank    TEXT,                        -- transfer info: bank / e-wallet name (per-member, reused across the event)
+  pay_account TEXT,                        -- transfer info: account number / phone
+  pay_qr      TEXT,                        -- transfer info: QR image (data URL)
   FOREIGN KEY (event_id) REFERENCES events(id)
 );
 

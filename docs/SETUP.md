@@ -214,6 +214,7 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/setMyCommands" \
         {"command":"newevent","description":"Tạo sự kiện mới cho nhóm"},
         {"command":"addmember","description":"Thêm thành viên vào sự kiện"},
         {"command":"tally","description":"Xem/đổi sự kiện đang dùng"},
+        {"command":"quyettoan","description":"Quyết toán: ai trả ai + thông tin chuyển khoản"},
         {"command":"help","description":"Hướng dẫn"}
       ]}'
 ```

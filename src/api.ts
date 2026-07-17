@@ -52,8 +52,11 @@ async function loadEvent(env: Env, eventId: string) {
   if (!event) return null;
 
   const participants = (await env.DB.prepare(
-    `SELECT id, name, user_id FROM participants WHERE event_id = ?1 ORDER BY rowid`,
-  ).bind(eventId).all<any>()).results;
+    `SELECT id, name, user_id, pay_bank, pay_account, pay_qr FROM participants WHERE event_id = ?1 ORDER BY rowid`,
+  ).bind(eventId).all<any>()).results.map((p: any) => ({
+    id: p.id, name: p.name, user_id: p.user_id,
+    payBank: p.pay_bank || null, payAccount: p.pay_account || null, payQr: p.pay_qr || null,
+  }));
 
   const expenseRows = (await env.DB.prepare(
     `SELECT * FROM expenses WHERE event_id = ?1 ORDER BY created_at`,
@@ -121,15 +124,65 @@ function summaryText(ev: NonNullable<Awaited<ReturnType<typeof loadEvent>>>): st
   const cur = ev.currency;
   const lines = ev.settlement.map((t: any) => `${name(t.from)} → ${name(t.to)}  ${fmtVN(t.amount)} ${cur}`);
   // Bank/account of each person owed money (QR images can't go in plain text).
+  // Transfer info now lives on the participant; fall back to the legacy per-expense
+  // value for events created before the move (and not yet re-entered).
   const creditors = ev.participants.filter((p: any) => (ev.balances[p.id] || 0) > 0.5);
   const payLines: string[] = [];
   for (const c of creditors) {
-    const ex = ev.expenses.find((x: any) => x.paidBy === c.id && x.payBank && x.payAccount);
-    if (ex) payLines.push(`💳 ${c.name}: ${ex.payBank} ${ex.payAccount}`);
+    let bank = c.payBank, acc = c.payAccount;
+    if (!acc) {
+      const ex = ev.expenses.find((x: any) => x.paidBy === c.id && x.payBank && x.payAccount);
+      if (ex) { bank = ex.payBank; acc = ex.payAccount; }
+    }
+    if (acc) payLines.push(`💳 ${c.name}: ${bank} ${acc}`);
   }
   const body = lines.join("\n") || "Đã sòng phẳng!";
   const pay = payLines.length ? `\n\n${payLines.join("\n")}` : "";
   return `💸 ${ev.title} — quyết toán\n\n${body}${pay}`;
+}
+
+// HTML-escape for Telegram parse_mode:"HTML" — only these three chars matter (far
+// simpler/safer than MarkdownV2, which would need every '.', '-', '(' backslashed).
+function htmlEsc(s: string): string {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Resolve a creditor's transfer info: participant value first, legacy per-expense fallback.
+function creditorPay(ev: any, c: any): { bank: string; acc: string } | null {
+  let bank = c.payBank, acc = c.payAccount;
+  if (!acc) {
+    const ex = ev.expenses.find((x: any) => x.paidBy === c.id && x.payBank && x.payAccount);
+    if (ex) { bank = ex.payBank; acc = ex.payAccount; }
+  }
+  return acc ? { bank: bank || "", acc } : null;
+}
+
+// Quyết toán for the /quyettoan bot command: a Telegram HTML message with two
+// independently-copyable <pre> blocks — "ai trả ai" and "thông tin chuyển khoản" —
+// so each carries its own copy button and account numbers paste cleanly into a bank
+// app. QR images can't render in text, so only bank/account appear here. Null = no event.
+export async function settlementMessageHTML(env: Env, eventId: string): Promise<string | null> {
+  const ev = await loadEvent(env, eventId);
+  if (!ev) return null;
+  const cur = ev.currency || "₫";
+  const nm = (id: string) => ev.participants.find((p: any) => p.id === id)?.name || "?";
+  const title = htmlEsc(ev.title);
+
+  const transfers = ev.settlement.map((t: any) => `${nm(t.from)} → ${nm(t.to)}: ${fmtVN(t.amount)} ${cur}`);
+  if (!transfers.length) return `💸 <b>${title}</b> — quyết toán\n\n✅ Đã sòng phẳng, không ai nợ ai.`;
+
+  const creditors = ev.participants.filter((p: any) => (ev.balances[p.id] || 0) > 0.5);
+  const payBlocks: string[] = [];
+  for (const c of creditors) {
+    const pay = creditorPay(ev, c);
+    if (pay) payBlocks.push(`${c.name}${pay.bank ? ` · ${pay.bank}` : ""}\n${pay.acc}`);
+  }
+
+  let msg = `💸 <b>${title}</b> — quyết toán\n\nAi trả ai (chạm để copy):\n<pre>${htmlEsc(transfers.join("\n"))}</pre>`;
+  msg += payBlocks.length
+    ? `\nThông tin chuyển khoản (chạm để copy):\n<pre>${htmlEsc(payBlocks.join("\n\n"))}</pre>`
+    : `\n<i>Chưa có thông tin chuyển khoản — thêm trong Tally để hiện ở đây.</i>`;
+  return msg;
 }
 
 // ---- router ----
@@ -211,6 +264,27 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       if (!name) return json({ error: "name required" }, 400);
       await addNamedParticipant(env, parts[1], name);
       return json(await loadEvent(env, parts[1]), 201);
+    }
+
+    // PUT /api/events/:id/participants/:pid/payment { bank, account, qr }
+    // Set a member's reusable transfer info. Anyone in the event may set it (it's
+    // just where-to-pay, low-stakes, mirrors "anyone can add expenses"). Passing an
+    // empty body clears it. QR is a data URL (capped); bank/account are short strings.
+    if (parts[0] === "events" && parts[2] === "participants" && parts[4] === "payment" && method === "PUT") {
+      const eventId = parts[1], pid = parts[3];
+      if (!(await isMember(env, eventId, me.id))) return json({ error: "Bạn cần tham gia sự kiện trước" }, 403);
+      const owns = await env.DB.prepare(
+        `SELECT id FROM participants WHERE id = ?1 AND event_id = ?2`,
+      ).bind(pid, eventId).first<any>();
+      if (!owns) return json({ error: "not found" }, 404);
+      const body = await req.json<any>();
+      const bank = String(body.bank || "").trim().slice(0, 40);
+      const account = String(body.account || "").trim().slice(0, 40);
+      const qr = String(body.qr || "").slice(0, 400_000);
+      await env.DB.prepare(
+        `UPDATE participants SET pay_bank = ?1, pay_account = ?2, pay_qr = ?3 WHERE id = ?4`,
+      ).bind(bank || null, account || null, qr || null, pid).run();
+      return json(await loadEvent(env, eventId));
     }
 
     // POST /api/events/:id/claim { participantId }  — link myself to a name
