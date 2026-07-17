@@ -336,6 +336,19 @@ function renderEvent(){
         <div class="row" style="flex-wrap:wrap">${unclaimed.map(p=>`<button class="chip" style="background:var(--greenSoft);color:var(--green)" onclick="claim('${p.id}')">${esc(p.name)}</button>`).join("")}</div></div>`:""}
     </div>
     <div class="pad" style="padding-top:0">
+      <div class="label">Thông tin chuyển khoản <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· nhập 1 lần, dùng cho cả sự kiện</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px">${EVENT.participants.map(p=>{
+        const has = (p.payBank&&p.payAccount)||p.payQr;
+        const desc = p.payQr ? "Ảnh QR" : (p.payBank&&p.payAccount ? `${esc(p.payBank)} · ${esc(p.payAccount)}` : "Chưa có");
+        return `<div class="card row" style="justify-content:space-between;align-items:center;padding:12px">
+          <div class="row" style="gap:8px">${avatar(p.name,26,p.user_id===ME.id)}
+            <div><div style="font-weight:700">${esc(p.name)}</div>
+              <div class="muted" style="font-size:12px">${desc}</div></div></div>
+          <button class="ghost" style="padding:6px 12px" onclick="openPayEditor('${p.id}')">${has?"Sửa":"＋ Thêm"}</button>
+        </div>`;
+      }).join("")}</div>
+    </div>
+    <div class="pad" style="padding-top:0">
       <div class="label">Các khoản chi</div>
       <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">Chưa có khoản chi nào. Thêm khoản đầu tiên.</div>`}</div>
     </div>`;
@@ -664,9 +677,18 @@ async function rdSave(){
 }
 
 // ---------- SETTLE ----------
-// Payment info for one person, gathered from their expenses (deduped).
+// Payment info for one person. Transfer info now lives on the participant (set once,
+// reused across the event); fall back to the legacy per-expense values for old events
+// that predate the move and haven't been re-entered.
 function payInfosFor(pid){
-  const seen=new Set(), out=[];
+  const p = EVENT.participants.find(x=>x.id===pid);
+  const out=[];
+  if(p){
+    if(p.payQr) out.push({qr:p.payQr});
+    if(p.payBank&&p.payAccount) out.push({bank:p.payBank,account:p.payAccount});
+  }
+  if(out.length) return out;
+  const seen=new Set();
   EVENT.expenses.filter(x=>x.paidBy===pid).forEach(x=>{
     if(x.payQr){ const k="q"+x.payQr.length+x.payQr.slice(30,60); if(!seen.has(k)){seen.add(k); out.push({qr:x.payQr});} }
     if(x.payBank&&x.payAccount){ const k="b"+x.payBank+x.payAccount; if(!seen.has(k)){seen.add(k); out.push({bank:x.payBank,account:x.payAccount});} }
@@ -674,6 +696,65 @@ function payInfosFor(pid){
   return out;
 }
 function closeModal(el){ el.closest(".modal").remove(); }
+
+// ---- per-member transfer info editor (set once, reused across the event) ----
+// Mirrors the old expense pay UI (manual bank/account or a QR image) but writes to
+// the participant via PUT .../payment. State lives in PAYEDIT; oninput/onchange keep
+// it synced so switching tabs never loses what was typed.
+let PAYEDIT = null;
+function openPayEditor(pid){
+  const p = EVENT.participants.find(x=>x.id===pid); if(!p) return;
+  PAYEDIT = { pid, mode: p.payQr ? "image" : "manual", bank: p.payBank||"", account: p.payAccount||"", qr: p.payQr||"" };
+  renderPayEditor(p);
+}
+function payEditMode(m){ PAYEDIT.mode=m; renderPayEditor(EVENT.participants.find(x=>x.id===PAYEDIT.pid)); }
+async function onPayQrPick(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  if(!/^image\//.test(f.type)) return toast("Vui lòng chọn tệp ảnh");
+  try{ PAYEDIT.qr = await fileToDataURL(f); renderPayEditor(EVENT.participants.find(x=>x.id===PAYEDIT.pid)); }
+  catch(e){ toast(e.message); }
+}
+function clearPayQr(){ PAYEDIT.qr=""; renderPayEditor(EVENT.participants.find(x=>x.id===PAYEDIT.pid)); }
+function renderPayEditor(p){
+  document.querySelectorAll(".modal.payedit").forEach(m=>m.remove());
+  const o=document.createElement("div"); o.className="modal payedit"; o.onclick=()=>o.remove();
+  o.innerHTML=`<div class="sheet" onclick="event.stopPropagation()">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div style="font-weight:800;font-size:17px">Thông tin chuyển khoản — ${esc(p.name)}</div>
+      <button class="icon" onclick="closeModal(this)">✕</button></div>
+    <div class="row" style="gap:6px;margin:12px 0">
+      <button class="ghost paytab ${PAYEDIT.mode==="manual"?"on":""}" onclick="payEditMode('manual')">Nhập tay</button>
+      <button class="ghost paytab ${PAYEDIT.mode==="image"?"on":""}" onclick="payEditMode('image')">Ảnh QR</button>
+    </div>
+    ${PAYEDIT.mode==="image"
+      ? (PAYEDIT.qr
+          ? `<div style="text-align:center">
+               <img src="${esc(PAYEDIT.qr)}" alt="QR" style="max-width:210px;max-height:210px;border-radius:12px;border:1px solid var(--line)" />
+               <div><button class="ghost" style="margin-top:10px;color:var(--clay)" onclick="clearPayQr()">Xoá ảnh</button></div></div>`
+          : `<label class="ghost" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:22px;border-style:dashed;cursor:pointer">
+               📷 Chọn ảnh QR chuyển khoản
+               <input type="file" accept="image/*" style="display:none" onchange="onPayQrPick(this)" /></label>`)
+      : `<div class="label" style="margin-top:0">Ngân hàng / Ví</div>
+         <select id="pe-bank" onchange="PAYEDIT.bank=this.value">${payOptions(PAYEDIT.bank||"Vietcombank")}</select>
+         <div class="label" style="margin-top:12px">Số tài khoản / SĐT</div>
+         <input id="pe-acc" value="${esc(PAYEDIT.account)}" placeholder="0123456789" inputmode="numeric" oninput="PAYEDIT.account=this.value" />`}
+    <button class="cta" style="margin-top:16px" onclick="savePayInfo()">✓ Lưu</button>
+  </div>`;
+  document.body.appendChild(o);
+}
+async function savePayInfo(){
+  if(!PAYEDIT) return;
+  // Manual mode clears any QR and vice-versa, so a member has one canonical method.
+  const body = PAYEDIT.mode==="image"
+    ? { qr: PAYEDIT.qr||"", bank:"", account:"" }
+    : { bank: (document.getElementById("pe-bank")?.value)||PAYEDIT.bank||"",
+        account: ((document.getElementById("pe-acc")?.value)||PAYEDIT.account||"").trim(), qr:"" };
+  try{
+    EVENT = await api("/events/"+EVENT.id+"/participants/"+PAYEDIT.pid+"/payment",{method:"PUT",body:JSON.stringify(body)});
+    document.querySelectorAll(".modal.payedit").forEach(m=>m.remove());
+    PAYEDIT=null; renderEvent(); toast("Đã lưu thông tin chuyển khoản");
+  }catch(e){ toast(e.message); }
+}
 // Payment modal for the person receiving a transfer.
 function openPayModal(pid){
   const p = EVENT.participants.find(x=>x.id===pid); if(!p) return;
