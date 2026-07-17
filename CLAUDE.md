@@ -67,9 +67,15 @@ an inline Yes/No confirm card via `pending_actions`), and the **bill-photo flow*
 Mini App review screen at `?draft=<id>` → confirm writes 1 expense per item in one D1
 batch). Weights are `REAL` in half-steps (0.5 = came late, 2 = covers a partner).
 Chat commands to manage a chat's events from Telegram: `/newevent`, `/tally` (switch
-active event), and `/addmember <names>` (add name-only participants to the active event;
-comma/`và`-separated, deduped, linked to a real user later via `ensureParticipant`).
-Not yet done: the optional MCP path.
+active event), `/addmember <names>` (add name-only participants to the active event;
+comma/`và`-separated, deduped, linked to a real user later via `ensureParticipant`),
+and `/quyettoan` (pick an event → post the settlement as a Telegram HTML message with
+two tap-to-copy `<pre>` blocks: "ai trả ai" + transfer info). **Transfer info is
+per-member**, not per-expense: `participants.pay_bank/pay_account/pay_qr`, set once in
+the Mini App's "Thông tin chuyển khoản" section (or PUT `.../payment`) and reused across
+the event; `summaryText`/`settlementMessageHTML` read the creditor's participant value
+and fall back to the legacy per-expense value (migration 0002 backfills). Not yet done:
+the optional MCP path.
 
 ## Bill-photo flow invariants (keep these too)
 - The vision model returns amounts **as printed strings**; only `parsePrintedAmount` in
@@ -92,8 +98,35 @@ Not yet done: the optional MCP path.
    parsing) as a remote MCP server using Cloudflare's Agents SDK (`createMcpHandler` /
    `McpAgent`, Streamable HTTP at `/mcp`), so they're reusable by other MCP clients
    (Claude Desktop, etc.). Only do this if reuse is wanted.
-3. Consider posting the settle-up summary straight into the group chat (Telegram
-   `answerWebAppQuery` / `sendMessage`) instead of copy-paste.
+3. **Settlement & payment tracking** (turn the settle-up math into a tracked
+   get-people-paid loop). Ship in two phases:
+   - **Phase 1 — split + notify (next).** The settlement is already computed
+     (`settle()` in `settle.ts`, run on load). Add a "notify members to pay" step:
+     post the settle-up summary straight into the group chat (`sendMessage` /
+     `answerWebAppQuery`) instead of copy-paste, listing who owes whom. Make it
+     actionable — surface the creditor's payout details (`pay_bank`/`pay_account`/
+     `pay_qr`, today per-expense) so a debtor can pay on the spot. **Constraint:** a
+     bot can't cold-DM a user, so notifications are a *group message* that @mentions
+     only **claimed** participants (`user_id` set); name-only rows are just named.
+     No new persistence needed — Phase 1 only posts.
+   - **Phase 2 — paid/received handshake (roadmap, later).** Persist settlement and
+     give it a lifecycle: a `settlements`/`payments` table + a two-sided handshake —
+     debtor taps "Tôi đã trả" (`pending → claimed`), creditor/admin taps "Đã nhận"
+     (`claimed → confirmed`), plus an admin (event `created_by`) override to mark
+     paid (cash / unresponsive members) and a Mini App status board. Reuses the
+     `pending_actions` atomic status-update (`UPDATE … WHERE status='pending'`) and
+     callback authz (`cq.from.id === row.user_id`) patterns. **Open decisions:**
+     (a) freeze-on-finalize + lock the event (snapshot the transfer set) vs a payment
+     ledger that nets down and keeps the event open — the settle output is derived,
+     so marking a specific transfer paid pins down something the math wants fluid;
+     (b) who confirms receipt — recommend the *creditor* confirms their own incoming
+     payments, with the event creator as an admin backstop.
+4. **Remove the expense editor's pay fields (deferred cleanup).** Transfer info moved
+   to the participant (per-member section); the expense form still has the old
+   `payMode/payBank/payAccount/payQr` inputs as a non-breaking fallback. Once the
+   per-member section is confirmed in the live app, drop those inputs from `renderEditor`
+   /`newExpense`/`editExpense`/`saveExpense` (and stop sending pay fields on expenses).
+   `payInfosFor`/`summaryText` already prefer the participant value, so removal is safe.
 
 ## Useful commands
 - `npm run dev` — local Worker (set DEV_MODE=true, open `/?dev=1:You`)
