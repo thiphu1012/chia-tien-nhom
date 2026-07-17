@@ -191,12 +191,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       ).bind(uid(), id, me.first_name || "Me", me.id).run();
 
       for (const n of (body.participantNames || [])) {
-        const name = String(n).trim().slice(0, 40);
-        if (name) {
-          await env.DB.prepare(
-            `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
-          ).bind(uid(), id, name).run();
-        }
+        if (String(n).trim()) await addNamedParticipant(env, id, String(n));
       }
       return json(await loadEvent(env, id), 201);
     }
@@ -214,9 +209,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const body = await req.json<any>();
       const name = String(body.name || "").trim().slice(0, 40);
       if (!name) return json({ error: "name required" }, 400);
-      await env.DB.prepare(
-        `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
-      ).bind(uid(), parts[1], name).run();
+      await addNamedParticipant(env, parts[1], name);
       return json(await loadEvent(env, parts[1]), 201);
     }
 
@@ -546,6 +539,18 @@ export async function createEventForChat(
   ).bind(id, chatId, title.trim().slice(0, 80), creator.id, now()).run();
   await ensureParticipant(env, id, { id: creator.id, first_name: creator.first_name });
   await bindEventToChat(env, chatId, id);
+  return id;
+}
+
+// Insert a name-only participant (user_id NULL) into an event; returns its id.
+// Name-only rows are linked to a real Telegram user later, when that user acts,
+// via ensureParticipant's name-matching branch. Single source of truth for how a
+// named participant is created — shared by the Mini App API and the /addmember command.
+export async function addNamedParticipant(env: Env, eventId: string, name: string): Promise<string> {
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
+  ).bind(id, eventId, name.trim().slice(0, 40)).run();
   return id;
 }
 

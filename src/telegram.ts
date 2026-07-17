@@ -1,9 +1,9 @@
 import type { Env } from "./index";
-import { parseWithAI, buildSplitArgs, type BuildResult, type Participant } from "./nl";
+import { parseWithAI, buildSplitArgs, norm, type BuildResult, type Participant } from "./nl";
 import { parseReceiptWithAI, normalizeReceipt } from "./receipt";
 import {
   resolveEventForChat, listParticipants, eventsForChat, createEventForChat, bindEventToChat,
-  ensureParticipant, writeExpense, eventSummaryText, fmtVN,
+  ensureParticipant, addNamedParticipant, writeExpense, eventSummaryText, fmtVN,
 } from "./api";
 
 const TTL_MS = 15 * 60 * 1000;                       // a confirmation card expires after 15 min
@@ -77,6 +77,7 @@ async function processUpdate(update: any, env: Env): Promise<void> {
   if (text.startsWith("/start") || text.startsWith("/split")) return sendStart(env, chatId, isPrivate);
   if (text.startsWith("/help")) return sendHelp(env, chatId);
   if (text.startsWith("/newevent")) return handleNewEvent(env, chatId, from, text);
+  if (text.startsWith("/addmember")) return handleAddMember(env, chatId, from, text);
   if (text.startsWith("/tally")) return handleTally(env, chatId, from);
 
   // Natural-language path. In groups, privacy mode stays ON, so we only see (and
@@ -124,6 +125,7 @@ async function sendHelp(env: Env, chatId: number): Promise<void> {
       "Tally giúp chia chi phí chung.\n" +
       "• /start — mở ứng dụng\n" +
       "• /newevent <tên> — tạo sự kiện mới cho nhóm\n" +
+      "• /addmember <tên> — thêm thành viên (vd: /addmember Aya, Ben)\n" +
       "• /tally — xem và đổi sự kiện đang dùng (nhóm có thể có nhiều sự kiện)\n" +
       `• Nhắn "@${env.BOT_USERNAME} chia 540k cho Aya, Ben tính đôi" — bot sẽ hỏi xác nhận trước khi lưu.`,
   });
@@ -166,6 +168,61 @@ async function handleNewEvent(env: Env, chatId: number, from: any, text: string)
       `Thêm chi tiêu: "@${env.BOT_USERNAME} chia 200k cho A, B", gửi ảnh hoá đơn, hoặc mở Tally (☰).\n` +
       "Gõ /tally để xem hoặc đổi giữa các sự kiện.",
   });
+}
+
+// ---- /addmember <names>: add name-only participants to the active event ----
+// Names are comma / "và" / newline separated. No confirm card: adding a name-only
+// row is free and reversible (unlike a money write), so — like /newevent — we just
+// write and echo. Each row links to a real Telegram user later, when that person
+// acts, via ensureParticipant's name-matching. Dedup is diacritics-insensitive (norm).
+async function handleAddMember(env: Env, chatId: number, from: any, text: string): Promise<void> {
+  const event = await resolveEventForChat(env, chatId);
+  if (!event) {
+    await tg(env, "sendMessage", {
+      chat_id: chatId,
+      text: "Nhóm chưa chọn sự kiện. Gõ /tally để chọn, hoặc /newevent để tạo mới.",
+    });
+    return;
+  }
+
+  // Strip the command token (+ any "@botname" Telegram appends in groups), then split.
+  const rest = text.replace(/^\/addmember(@\S+)?\s*/i, "").trim();
+  // Split on commas/semicolons/newlines, or the connectors "và"/"and". The connectors
+  // must be whitespace-delimited: JS \b is ASCII-only (it fails to bound "và" because
+  // "à" isn't a word char), and an unbounded "và"/"and" would split names like "Vàng".
+  const names = rest
+    .split(/\s*[,;\n]\s*|\s+(?:và|and)\s+/i)
+    .map((s) => s.trim().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 20);
+  if (!names.length) {
+    await tg(env, "sendMessage", { chat_id: chatId, text: "Thêm ai nào? Ví dụ: /addmember Aya, Ben, Minh" });
+    return;
+  }
+
+  // Dedup against the current roster AND within this message (norm = accent/case-insensitive).
+  const seen = new Set((await listParticipants(env, event.id)).map((p) => norm(p.name)));
+  const added: string[] = [];
+  const skipped: string[] = [];
+  for (const name of names) {
+    const key = norm(name);
+    if (!key || seen.has(key)) { skipped.push(name); continue; }
+    seen.add(key);
+    await addNamedParticipant(env, event.id, name);
+    added.push(name);
+  }
+  log("member.add", { chat: chatId, event: event.id, added: added.length, skipped: skipped.length });
+
+  const roster = (await listParticipants(env, event.id)).map((p) => p.name).join(", ");
+  let msg: string;
+  if (!added.length) {
+    msg = `Không có ai mới để thêm (đã có sẵn: ${skipped.join(", ")}).\nNhóm hiện có: ${roster}.`;
+  } else {
+    msg = `✅ Đã thêm ${added.join(", ")} vào "${event.title}".`;
+    if (skipped.length) msg += `\n(Bỏ qua vì đã có: ${skipped.join(", ")}.)`;
+    msg += `\nNhóm giờ có: ${roster}.`;
+  }
+  await tg(env, "sendMessage", { chat_id: chatId, text: msg });
 }
 
 // ---- natural-language split ----
