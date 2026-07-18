@@ -104,6 +104,15 @@ function addressedToBot(env: Env, msg: any, text: string, isPrivate: boolean): b
     || msg.reply_to_message?.from?.username?.toLowerCase() === env.BOT_USERNAME.toLowerCase();
 }
 
+// A t.me deep link that opens the Mini App from *any* chat, including public
+// groups. Native web_app buttons only launch in private chats, so groups need a
+// plain url button pointing at the bot's Main Mini App (enable it in BotFather).
+// `startParam` reaches the app as start_param → parsed by public/index.html:
+// "event_<id>" deep-links to one event; "" opens home.
+function openAppButton(env: Env, text: string, startParam = ""): any {
+  return { text, url: `https://t.me/${env.BOT_USERNAME}?startapp=${startParam}` };
+}
+
 // ---- slash commands ----
 async function sendStart(env: Env, chatId: number, isPrivate: boolean): Promise<void> {
   if (isPrivate) {
@@ -115,7 +124,8 @@ async function sendStart(env: Env, chatId: number, isPrivate: boolean): Promise<
   } else {
     await tg(env, "sendMessage", {
       chat_id: chatId,
-      text: "Tally đã sẵn sàng cho nhóm này. Chạm nút menu của bot (☰) để mở công cụ, hoặc gõ /tally để chọn sự kiện rồi nhắn \"@" + env.BOT_USERNAME + " chia 100k cho A, B\".",
+      text: "Tally đã sẵn sàng cho nhóm này. Chạm nút bên dưới để mở, hoặc gõ /tally để chọn sự kiện rồi nhắn \"@" + env.BOT_USERNAME + " chia 100k cho A, B\".",
+      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally")]] },
     });
   }
 }
@@ -140,7 +150,8 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
   if (!events.length) {
     await tg(env, "sendMessage", {
       chat_id: chatId,
-      text: "Nhóm chưa có sự kiện nào. Tạo bằng: /newevent Đà Lạt 3 ngày — hoặc mở Tally (nút menu ☰).",
+      text: "Nhóm chưa có sự kiện nào. Tạo bằng: /newevent Đà Lạt 3 ngày — hoặc mở Tally để tạo:",
+      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally")]] },
     });
     return;
   }
@@ -148,9 +159,12 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
     chat_id: chatId,
     text: "Chọn sự kiện đang dùng cho nhóm (✓ = hiện tại). Gõ /tally lần nữa để đổi, /newevent để thêm:",
     reply_markup: {
-      inline_keyboard: events.map((e) => [
-        { text: (e.active ? "✓ " : "") + e.title, callback_data: `t:bind:${e.id}` },
-      ]),
+      inline_keyboard: [
+        ...events.map((e) => [
+          { text: (e.active ? "✓ " : "") + e.title, callback_data: `t:bind:${e.id}` },
+        ]),
+        [openAppButton(env, "💸 Mở Tally")],
+      ],
     },
   });
 }
@@ -183,7 +197,12 @@ async function handleQuyetToan(env: Env, chatId: number, isPrivate: boolean, fro
 async function sendQuyetToan(env: Env, chatId: number, eventId: string): Promise<void> {
   const html = await settlementMessageHTML(env, eventId);
   if (!html) { await tg(env, "sendMessage", { chat_id: chatId, text: "Không tìm thấy sự kiện." }); return; }
-  await tg(env, "sendMessage", { chat_id: chatId, text: html, parse_mode: "HTML" });
+  await tg(env, "sendMessage", {
+    chat_id: chatId,
+    text: html,
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally", `event_${eventId}`)]] },
+  });
 }
 
 // ---- /newevent <name>: create a new event owned by this chat, make it active ----
@@ -199,8 +218,9 @@ async function handleNewEvent(env: Env, chatId: number, from: any, text: string)
   await tg(env, "sendMessage", {
     chat_id: chatId,
     text: `✅ Đã tạo "${title}" và chọn cho nhóm này.\n` +
-      `Thêm chi tiêu: "@${env.BOT_USERNAME} chia 200k cho A, B", gửi ảnh hoá đơn, hoặc mở Tally (☰).\n` +
+      `Thêm chi tiêu: "@${env.BOT_USERNAME} chia 200k cho A, B", gửi ảnh hoá đơn, hoặc mở Tally.\n` +
       "Gõ /tally để xem hoặc đổi giữa các sự kiện.",
+    reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally", `event_${id}`)]] },
   });
 }
 
