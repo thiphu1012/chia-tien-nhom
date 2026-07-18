@@ -344,21 +344,23 @@ function renderEvent(){
         <div class="row" style="flex-wrap:wrap">${unclaimed.map(p=>`<button class="chip" style="background:var(--greenSoft);color:var(--green)" onclick="claim('${p.id}')">${esc(p.name)}</button>`).join("")}</div></div>`:""}
     </div>
     <div class="pad" style="padding-top:0">
+      <div class="label">Các khoản chi</div>
+      <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">Chưa có khoản chi nào. Thêm khoản đầu tiên.</div>`}</div>
+    </div>
+    <div class="pad" style="padding-top:0">
       <div class="label">Thông tin chuyển khoản <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· nhập 1 lần, dùng cho cả sự kiện</span></div>
       <div style="display:flex;flex-direction:column;gap:8px">${EVENT.participants.map(p=>{
         const has = (p.payBank&&p.payAccount)||p.payQr;
         const desc = p.payQr ? "Ảnh QR" : (p.payBank&&p.payAccount ? `${esc(p.payBank)} · ${esc(p.payAccount)}` : "Chưa có");
+        // Only edit your own payout info; the event creator (admin) may edit anyone's.
+        const canEdit = p.user_id===ME.id || EVENT.createdBy===ME.id;
         return `<div class="card row" style="justify-content:space-between;align-items:center;padding:12px">
           <div class="row" style="gap:8px">${avatar(p.name,26,p.user_id===ME.id)}
             <div><div style="font-weight:700">${esc(p.name)}</div>
               <div class="muted" style="font-size:12px">${desc}</div></div></div>
-          <button class="ghost" style="padding:6px 12px" onclick="openPayEditor('${p.id}')">${has?"Sửa":"＋ Thêm"}</button>
+          ${canEdit ? `<button class="ghost" style="padding:6px 12px" onclick="openPayEditor('${p.id}')">${has?"Sửa":"＋ Thêm"}</button>` : ``}
         </div>`;
       }).join("")}</div>
-    </div>
-    <div class="pad" style="padding-top:0">
-      <div class="label">Các khoản chi</div>
-      <div style="display:flex;flex-direction:column;gap:10px">${expenses || `<div class="muted" style="font-size:14px">Chưa có khoản chi nào. Thêm khoản đầu tiên.</div>`}</div>
     </div>`;
   bar.innerHTML = `<div class="row">
     <button class="cta" onclick="newExpense()" ${iAmIn?"":'style="opacity:.6"'} title="${iAmIn?"":"Hãy tham gia sự kiện trước"}">＋ Thêm khoản chi</button>

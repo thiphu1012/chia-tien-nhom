@@ -319,11 +319,18 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
     // empty body clears it. QR is a data URL (capped); bank/account are short strings.
     if (parts[0] === "events" && parts[2] === "participants" && parts[4] === "payment" && method === "PUT") {
       const eventId = parts[1], pid = parts[3];
-      if (!(await isMember(env, eventId, me.id))) return json({ error: "Bạn cần tham gia sự kiện trước" }, 403);
-      const owns = await env.DB.prepare(
-        `SELECT id FROM participants WHERE id = ?1 AND event_id = ?2`,
+      const ev = await env.DB.prepare(`SELECT created_by FROM events WHERE id = ?1`).bind(eventId).first<any>();
+      if (!ev) return json({ error: "not found" }, 404);
+      const target = await env.DB.prepare(
+        `SELECT user_id FROM participants WHERE id = ?1 AND event_id = ?2`,
       ).bind(pid, eventId).first<any>();
-      if (!owns) return json({ error: "not found" }, 404);
+      if (!target) return json({ error: "not found" }, 404);
+      // Payout info redirects money, so only its owner may set it: you can edit the
+      // participant linked to you; the event creator (admin) may edit anyone's — e.g.
+      // to fill in name-only members who haven't opened the app yet.
+      if (target.user_id !== me.id && ev.created_by !== me.id) {
+        return json({ error: "Chỉ có thể sửa thông tin chuyển khoản của chính bạn" }, 403);
+      }
       const body = await req.json<any>();
       const bank = String(body.bank || "").trim().slice(0, 40);
       const account = String(body.account || "").trim().slice(0, 40);
