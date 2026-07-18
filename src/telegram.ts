@@ -125,7 +125,7 @@ async function sendStart(env: Env, chatId: number, isPrivate: boolean): Promise<
     await tg(env, "sendMessage", {
       chat_id: chatId,
       text: "Tally đã sẵn sàng cho nhóm này. Chạm nút bên dưới để mở, hoặc gõ /tally để chọn sự kiện rồi nhắn \"@" + env.BOT_USERNAME + " chia 100k cho A, B\".",
-      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally")]] },
+      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally", `g${chatId}`)]] },
     });
   }
 }
@@ -151,7 +151,7 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
     await tg(env, "sendMessage", {
       chat_id: chatId,
       text: "Nhóm chưa có sự kiện nào. Tạo bằng: /newevent Đà Lạt 3 ngày — hoặc mở Tally để tạo:",
-      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally")]] },
+      reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally", `g${chatId}`)]] },
     });
     return;
   }
@@ -163,7 +163,7 @@ async function handleTally(env: Env, chatId: number, from: any): Promise<void> {
         ...events.map((e) => [
           { text: (e.active ? "✓ " : "") + e.title, callback_data: `t:bind:${e.id}` },
         ]),
-        [openAppButton(env, "💸 Mở Tally")],
+        [openAppButton(env, "💸 Mở Tally", `g${chatId}`)],
       ],
     },
   });

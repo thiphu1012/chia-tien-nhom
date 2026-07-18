@@ -22,13 +22,17 @@ function json(data: unknown, status = 200): Response {
 }
 
 // ---- auth: resolve the acting Telegram user from init data ----
-async function authUser(req: Request, env: Env): Promise<TgUser | Response> {
+async function authUser(req: Request, env: Env): Promise<{ me: TgUser; startParam: string | null } | Response> {
   // Dev-only bypass so you can test with curl or a browser outside Telegram.
+  // X-Dev-Start stands in for the signed start_param (e.g. "g-100123" to test group scope).
   if (env.DEV_MODE === "true") {
     const dev = req.headers.get("X-Dev-User");
     if (dev) {
       const [id, ...rest] = dev.split(":");
-      return { id: Number(id), first_name: rest.join(":") || `User ${id}` };
+      return {
+        me: { id: Number(id), first_name: rest.join(":") || `User ${id}` },
+        startParam: req.headers.get("X-Dev-Start"),
+      };
     }
   }
   const auth = req.headers.get("Authorization") || "";
@@ -36,7 +40,17 @@ async function authUser(req: Request, env: Env): Promise<TgUser | Response> {
   if (!m) return json({ error: "missing init data" }, 401);
   const v = await verifyInitData(m[1], env.BOT_TOKEN);
   if (!v.ok || !v.user) return json({ error: "invalid init data", reason: v.reason }, 401);
-  return v.user;
+  return { me: v.user, startParam: v.startParam ?? null };
+}
+
+// A group launch carries the owning chat id in the Mini App's *signed* start_param
+// ("g<chatId>"), so /events can scope the list to that chat — the same home_chat_id
+// filter /tally uses. A private launch has no such param → null → show all my events.
+// The value is trusted because it rides inside the HMAC-verified initData, never a
+// raw query param.
+function chatScopeFromStartParam(sp: string | null): number | null {
+  const m = (sp || "").match(/^g(-?\d+)$/);
+  return m ? Number(m[1]) : null;
 }
 
 async function upsertUser(env: Env, u: TgUser) {
@@ -189,7 +203,8 @@ export async function settlementMessageHTML(env: Env, eventId: string): Promise<
 export async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
   const who = await authUser(req, env);
   if (who instanceof Response) return who;
-  const me = who;
+  const me = who.me;
+  const chatScope = chatScopeFromStartParam(who.startParam);
   await upsertUser(env, me);
 
   const parts = url.pathname.replace(/^\/api\//, "").replace(/\/$/, "").split("/");
@@ -201,15 +216,24 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       return json({ id: me.id, first_name: me.first_name, username: me.username });
     }
 
-    // GET /api/events  — events I created or am a (claimed) participant in
+    // GET /api/events
+    //  · group launch (chatScope set) → every event owned by that chat, regardless of
+    //    who's a member — matches what /tally shows in the same group.
+    //  · private launch → every event I created or am a (claimed) participant in.
     if (parts[0] === "events" && parts.length === 1 && method === "GET") {
-      const rows = (await env.DB.prepare(
-        `SELECT DISTINCT e.id, e.title, e.currency, e.created_by, e.created_at
-           FROM events e
-           LEFT JOIN participants p ON p.event_id = e.id
-          WHERE e.created_by = ?1 OR p.user_id = ?1
-          ORDER BY e.created_at DESC`,
-      ).bind(me.id).all<any>()).results;
+      const rows = chatScope !== null
+        ? (await env.DB.prepare(
+            `SELECT id, title, currency, created_by, created_at
+               FROM events WHERE home_chat_id = ?1
+              ORDER BY created_at DESC`,
+          ).bind(chatScope).all<any>()).results
+        : (await env.DB.prepare(
+            `SELECT DISTINCT e.id, e.title, e.currency, e.created_by, e.created_at
+               FROM events e
+               LEFT JOIN participants p ON p.event_id = e.id
+              WHERE e.created_by = ?1 OR p.user_id = ?1
+              ORDER BY e.created_at DESC`,
+          ).bind(me.id).all<any>()).results;
 
       const events = [];
       for (const e of rows) {
@@ -224,7 +248,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
           participantCount: cnt.p, expenseCount: tot.n, total: tot.t,
         });
       }
-      return json({ events });
+      return json({ events, scope: chatScope !== null ? "chat" : "all" });
     }
 
     // POST /api/events  { title, currency, participantNames: [] }
@@ -234,9 +258,11 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       if (!title) return json({ error: "title required" }, 400);
       const currency = String(body.currency || "₫").slice(0, 3) || "₫";
       const id = uid();
+      // In group scope, bind the event to that chat (trusted, from the signed
+      // start_param) so it appears in the same group's list and in /tally.
       await env.DB.prepare(
         `INSERT INTO events (id, home_chat_id, title, currency, created_by, created_at) VALUES (?1,?2,?3,?4,?5,?6)`,
-      ).bind(id, body.chatId ?? null, title, currency, me.id, now()).run();
+      ).bind(id, chatScope ?? body.chatId ?? null, title, currency, me.id, now()).run();
 
       // creator is auto-added and linked to their account
       await env.DB.prepare(
