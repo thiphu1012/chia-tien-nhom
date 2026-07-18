@@ -171,11 +171,21 @@ function creditorPay(ev: any, c: any): { bank: string; acc: string } | null {
   return acc ? { bank: bank || "", acc } : null;
 }
 
-// Quyết toán for the /quyettoan bot command: a Telegram HTML message with two
-// independently-copyable <pre> blocks — "ai trả ai" and "thông tin chuyển khoản" —
-// so each carries its own copy button and account numbers paste cleanly into a bank
-// app. QR images can't render in text, so only bank/account appear here. Null = no event.
-export async function settlementMessageHTML(env: Env, eventId: string): Promise<string | null> {
+// A creditor's QR image (base64 data URL): participant value first, legacy per-expense
+// fallback. Common in VN where MoMo/bank QR is the primary payment method.
+function creditorQr(ev: any, c: any): string | null {
+  if (c.payQr) return c.payQr;
+  const ex = ev.expenses.find((x: any) => x.paidBy === c.id && x.payQr);
+  return ex ? ex.payQr : null;
+}
+
+// Quyết toán for the /quyettoan bot command. Returns the HTML text message (two
+// tap-to-copy <pre> blocks — "ai trả ai" + text transfer info) AND the creditors who
+// supplied a QR image. A QR can't render inside a text/HTML message, so the caller
+// posts those as separate photos; the text just points at them. Null = no event.
+export async function settlementPost(
+  env: Env, eventId: string,
+): Promise<{ html: string; qrCreditors: { name: string; qr: string }[] } | null> {
   const ev = await loadEvent(env, eventId);
   if (!ev) return null;
   const cur = ev.currency || "₫";
@@ -183,20 +193,31 @@ export async function settlementMessageHTML(env: Env, eventId: string): Promise<
   const title = htmlEsc(ev.title);
 
   const transfers = ev.settlement.map((t: any) => `${nm(t.from)} → ${nm(t.to)}: ${fmtVN(t.amount)} ${cur}`);
-  if (!transfers.length) return `💸 <b>${title}</b> — quyết toán\n\n✅ Đã sòng phẳng, không ai nợ ai.`;
+  if (!transfers.length) {
+    return { html: `💸 <b>${title}</b> — quyết toán\n\n✅ Đã sòng phẳng, không ai nợ ai.`, qrCreditors: [] };
+  }
 
   const creditors = ev.participants.filter((p: any) => (ev.balances[p.id] || 0) > 0.5);
   const payBlocks: string[] = [];
+  const qrCreditors: { name: string; qr: string }[] = [];
   for (const c of creditors) {
     const pay = creditorPay(ev, c);
     if (pay) payBlocks.push(`${c.name}${pay.bank ? ` · ${pay.bank}` : ""}\n${pay.acc}`);
+    const qr = creditorQr(ev, c);
+    if (qr) qrCreditors.push({ name: c.name, qr });
   }
 
-  let msg = `💸 <b>${title}</b> — quyết toán\n\nAi trả ai (chạm để copy):\n<pre>${htmlEsc(transfers.join("\n"))}</pre>`;
-  msg += payBlocks.length
-    ? `\nThông tin chuyển khoản (chạm để copy):\n<pre>${htmlEsc(payBlocks.join("\n\n"))}</pre>`
-    : `\n<i>Chưa có thông tin chuyển khoản — thêm trong Tally để hiện ở đây.</i>`;
-  return msg;
+  let html = `💸 <b>${title}</b> — quyết toán\n\nAi trả ai (chạm để copy):\n<pre>${htmlEsc(transfers.join("\n"))}</pre>`;
+  if (payBlocks.length) {
+    html += `\nThông tin chuyển khoản (chạm để copy):\n<pre>${htmlEsc(payBlocks.join("\n\n"))}</pre>`;
+  }
+  if (qrCreditors.length) {
+    html += `\n📷 Mã QR của ${htmlEsc(qrCreditors.map((q) => q.name).join(", "))} ở ảnh bên dưới.`;
+  }
+  if (!payBlocks.length && !qrCreditors.length) {
+    html += `\n<i>Chưa có thông tin chuyển khoản — thêm trong Tally để hiện ở đây.</i>`;
+  }
+  return { html, qrCreditors };
 }
 
 // ---- router ----

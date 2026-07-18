@@ -4,7 +4,7 @@ import { parseReceiptWithAI, normalizeReceipt } from "./receipt";
 import {
   resolveEventForChat, listParticipants, eventsForChat, recentEventsForUser, createEventForChat,
   bindEventToChat, ensureParticipant, addNamedParticipant, writeExpense, eventSummaryText,
-  settlementMessageHTML, fmtVN,
+  settlementPost, fmtVN,
 } from "./api";
 
 const TTL_MS = 15 * 60 * 1000;                       // a confirmation card expires after 15 min
@@ -195,14 +195,41 @@ async function handleQuyetToan(env: Env, chatId: number, isPrivate: boolean, fro
 // Build + send the settlement message (parse_mode HTML → the two <pre> blocks render
 // as tap-to-copy boxes). Sent as a fresh message so the picker (if any) stays put.
 async function sendQuyetToan(env: Env, chatId: number, eventId: string): Promise<void> {
-  const html = await settlementMessageHTML(env, eventId);
-  if (!html) { await tg(env, "sendMessage", { chat_id: chatId, text: "Không tìm thấy sự kiện." }); return; }
+  const post = await settlementPost(env, eventId);
+  if (!post) { await tg(env, "sendMessage", { chat_id: chatId, text: "Không tìm thấy sự kiện." }); return; }
   await tg(env, "sendMessage", {
     chat_id: chatId,
-    text: html,
+    text: post.html,
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: [[openAppButton(env, "💸 Mở Tally", `event_${eventId}`)]] },
   });
+  // A QR can't live in a text message, so each QR-creditor's code goes out as a photo.
+  for (const c of post.qrCreditors) {
+    await sendPhotoDataUrl(env, chatId, c.qr, `📷 ${c.name} — quét mã để chuyển khoản`);
+  }
+}
+
+// Post a base64 data-URL image as a Telegram photo. sendPhoto needs a file upload, not
+// a data: URL, so decode the base64 and send it as multipart/form-data. Caption is plain
+// text (no parse_mode) so a participant name can't inject markup. Best-effort: a bad/oversized
+// image is skipped rather than failing the whole /quyettoan.
+async function sendPhotoDataUrl(env: Env, chatId: number, dataUrl: string, caption: string): Promise<void> {
+  const m = /^data:(image\/[\w.+-]+);base64,(.*)$/s.exec(dataUrl || "");
+  if (!m) return;
+  try {
+    const mime = m[1];
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("caption", caption);
+    form.append("photo", new Blob([bytes], { type: mime }), `qr.${mime.split("/")[1] || "png"}`);
+    // Note: don't set Content-Type — fetch derives the multipart boundary from FormData.
+    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendPhoto`, { method: "POST", body: form });
+  } catch (e) {
+    log("qr.send", { chat: chatId, error: String(e) });
+  }
 }
 
 // ---- /newevent <name>: create a new event owned by this chat, make it active ----
