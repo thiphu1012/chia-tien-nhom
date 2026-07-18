@@ -245,12 +245,16 @@ function launchTarget(){
 // ---------- HOME ----------
 async function home(){
   EVENT = null;
-  app.innerHTML = `<div class="pad"><h1>Tally</h1><div class="sub">Chia hóa đơn, sòng phẳng với nhau.</div></div>
+  app.innerHTML = `<div class="pad"><h1>Tally</h1><div class="sub" id="home-sub">Đang tải…</div></div>
     <div id="list" class="pad muted">Đang tải…</div>`;
   bar.innerHTML = `<button class="cta" onclick="newEventForm()">＋ Sự kiện mới</button>`;
-  const { events } = await api("/events");
+  // scope="chat" when opened from a group (only that group's events); "all" in a private chat.
+  const { events, scope } = await api("/events");
+  const grouped = scope === "chat";
+  document.getElementById("home-sub").textContent = grouped
+    ? "Sự kiện của nhóm này." : "Chia hóa đơn, sòng phẳng với nhau.";
   const list = document.getElementById("list");
-  if (!events.length){ list.innerHTML = `<div class="muted" style="text-align:center;padding:30px">Chưa có sự kiện nào. Tạo một sự kiện cho chuyến đi hoặc bữa ăn sắp tới.</div>`; return; }
+  if (!events.length){ list.innerHTML = `<div class="muted" style="text-align:center;padding:30px">${grouped ? "Nhóm này chưa có sự kiện nào. Tạo sự kiện đầu tiên cho nhóm." : "Chưa có sự kiện nào. Tạo một sự kiện cho chuyến đi hoặc bữa ăn sắp tới."}</div>`; return; }
   list.className = "pad"; list.style.display="flex"; list.style.flexDirection="column"; list.style.gap="12px";
   list.innerHTML = events.map(e=>`
     <button class="card" style="text-align:left" onclick="openEvent('${e.id}')">
