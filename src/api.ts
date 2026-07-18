@@ -309,6 +309,14 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const body = await req.json<any>();
       const name = String(body.name || "").trim().slice(0, 40);
       if (!name) return json({ error: "name required" }, 400);
+      // Reject a duplicate name (accent/case-insensitive) so the roster stays unambiguous.
+      const key = norm(name);
+      const roster = (await env.DB.prepare(
+        `SELECT name FROM participants WHERE event_id = ?1`,
+      ).bind(parts[1]).all<any>()).results;
+      if (key && roster.some((r: any) => norm(r.name) === key)) {
+        return json({ error: `Đã có "${name}" trong sự kiện rồi.` }, 409);
+      }
       await addNamedParticipant(env, parts[1], name);
       return json(await loadEvent(env, parts[1]), 201);
     }
@@ -675,10 +683,22 @@ export async function createEventForChat(
 // via ensureParticipant's name-matching branch. Single source of truth for how a
 // named participant is created — shared by the Mini App API and the /addmember command.
 export async function addNamedParticipant(env: Env, eventId: string, name: string): Promise<string> {
+  const clean = name.trim().slice(0, 40);
+  // A name-only participant's name IS its identity, so never create a duplicate: if
+  // someone with the same accent/case-insensitive name already exists (claimed or not),
+  // return that row instead of inserting a second. Makes this primitive safe for any caller.
+  const key = norm(clean);
+  if (key) {
+    const rows = (await env.DB.prepare(
+      `SELECT id, name FROM participants WHERE event_id = ?1`,
+    ).bind(eventId).all<any>()).results;
+    const dup = rows.find((r: any) => norm(r.name) === key);
+    if (dup) return dup.id;
+  }
   const id = uid();
   await env.DB.prepare(
     `INSERT INTO participants (id, event_id, name, user_id) VALUES (?1,?2,?3,NULL)`,
-  ).bind(id, eventId, name.trim().slice(0, 40)).run();
+  ).bind(id, eventId, clean).run();
   return id;
 }
 
