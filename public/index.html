@@ -224,18 +224,22 @@ const nameOf = id => EVENT?.participants.find(p=>p.id===id)?.name || "?";
 async function start(){
   try { ME = await api("/me"); }
   catch(e){ app.innerHTML = `<div class="pad card" style="margin:16px">Không thể xác minh phiên Telegram của bạn.<br><span class="muted">${e.message}</span><br><br>Hãy mở ứng dụng từ bot trong Telegram, hoặc thêm <b>?dev=1:Ban</b> vào URL để kiểm thử cục bộ.</div>`; return; }
-  // Deep link from a bot-parsed bill photo: ?draft=<id> (private-chat web_app
-  // button) or startapp=draft_<id> (t.me link used in groups).
-  const draftId = draftIdFromLaunch();
-  if (draftId) return reviewDraft(draftId);
+  // Deep link into the app. ?draft=<id> is the private-chat web_app button; the
+  // t.me links used from group chats arrive as start_param: draft_<id> (bill
+  // review) or event_<id> (open one event — the group "Mở Tally" buttons).
+  const t = launchTarget();
+  if (t?.kind === "draft") return reviewDraft(t.id);
+  if (t?.kind === "event") return openEvent(t.id);
   home();
 }
 
-function draftIdFromLaunch(){
+function launchTarget(){
   const q = new URLSearchParams(location.search).get("draft");
-  if (q) return q;
+  if (q) return { kind: "draft", id: q };
   const sp = tg?.initDataUnsafe?.start_param || "";
-  return sp.startsWith("draft_") ? sp.slice(6) : null;
+  if (sp.startsWith("draft_")) return { kind: "draft", id: sp.slice(6) };
+  if (sp.startsWith("event_")) return { kind: "event", id: sp.slice(6) };
+  return null;
 }
 
 // ---------- HOME ----------
