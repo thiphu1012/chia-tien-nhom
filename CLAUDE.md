@@ -127,6 +127,29 @@ the optional MCP path.
    per-member section is confirmed in the live app, drop those inputs from `renderEditor`
    /`newExpense`/`editExpense`/`saveExpense` (and stop sending pay fields on expenses).
    `payInfosFor`/`summaryText` already prefer the participant value, so removal is safe.
+5. **User-centric member identity & guards (next phase).** Today a name-only participant's
+   *name* is its identity (`participants.user_id = NULL` until claimed), which caused real
+   friction this phase: the "which Phú holds the QR?" ambiguity and duplicate-name
+   confusion. Shift identity to be keyed on the verified `user_id` once claimed.
+   *Already shipped this phase (the base to build on):* payout-info edits are guarded to the
+   owner (`participants.user_id === me`) or the event creator/admin (`PUT …/payment`), and
+   duplicate names are rejected (`addNamedParticipant` is idempotent + `POST …/participants`
+   returns 409). Remaining:
+   - **Self-join in the Mini App.** New `POST /events/:id/join` → `ensureParticipant(me)`,
+     plus a "Tôi cũng tham gia" button in `renderEvent` shown when `!iAmIn`. Closes the
+     bootstrapping gap: a non-member with no name row can't enroll from the app today
+     (`POST …/participants` is `isMember`-gated; `claim` needs an existing unclaimed row).
+     Adds only *yourself*, keyed to your verified Telegram id — no weakening of the guard.
+   - **Auto-match on claim.** The "Bạn là ai?" card (`renderEvent`) lists *all* unclaimed
+     names; pre-select the row whose `norm(name)` matches the user's first name (same match
+     `ensureParticipant` already does in the bot flows) so the person doesn't have to hunt.
+   - **Per-user transfer info.** Pay info is per-participant-*per-event*
+     (`participants.pay_bank/pay_account/pay_qr`), so a claimed user re-enters their QR/account
+     every event. Move it to the `users` row (or copy-forward on claim) so it follows a person
+     across events — this is what would have prevented the QR-missing episode. Schema + UX change.
+   - **Consistent user-keyed guards + optional audit.** Extend the own-vs-admin pattern beyond
+     payout edits where it applies; decide whether to add `participants.added_by` (no column
+     records who added a name-only member today).
 
 ## Useful commands
 - `npm run dev` — local Worker (set DEV_MODE=true, open `/?dev=1:You`)
