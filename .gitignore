@@ -25,3 +25,6 @@ dist/
 
 # Local snapshots / archives
 tally-expense-bot.zip
+
+# Editor emergency-save / backup files (e.g. nano's wrangler.toml.save)
+*.save
